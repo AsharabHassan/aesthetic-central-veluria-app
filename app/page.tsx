@@ -287,6 +287,30 @@ export default function Home() {
                 </div>
               ))}
             </div>
+
+            {/* Short enzyme / Veluria explainer — a little science on the
+                landing page so visitors know what the treatment behind the
+                analysis actually is. Kept brief and appearance-level. */}
+            <div
+              className="mx-auto mt-14 max-w-xl animate-fade-scale rounded-[1.6rem] border border-white/70 bg-white/55 p-6 text-left backdrop-blur-sm sm:p-8"
+              style={{ animationDelay: "540ms" }}
+            >
+              <p className="eyebrow">The science · Veluria</p>
+              <h2 className="display mt-2 text-2xl text-plum sm:text-3xl">
+                Skin, rebuilt by <span className="serum-text italic">enzymes</span>
+              </h2>
+              <p className="mt-4 leading-relaxed text-plum-soft">
+                Veluria is a professional <strong className="font-medium text-plum">enzyme
+                bioremodelling</strong> range. Rather than sitting on the surface, its
+                recombinant collagenase enzymes work <em>within</em> your skin — gently
+                clearing tired, disorganised collagen and prompting your skin to build
+                fresh collagen of its own.
+              </p>
+              <p className="mt-3 leading-relaxed text-plum-soft">
+                Over a short course, the skin looks firmer, smoother and more even —
+                rebuilt from within, not simply hydrated on top.
+              </p>
+            </div>
           </section>
         )}
 

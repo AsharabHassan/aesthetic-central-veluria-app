@@ -87,7 +87,7 @@ function PortraitCompare({ before, after }: { before: string; after: string }) {
   );
 }
 
-const TAGS = ["Anti-wrinkle", "Dermal filler", "Skin rejuvenation"];
+const TAGS = ["Veluria Silk Skin", "Texture & fine lines", "Firmness & glow"];
 
 export default function CaseStudy() {
   return (
@@ -103,15 +103,16 @@ export default function CaseStudy() {
 
         {/* Write-up */}
         <div>
-          <p className="eyebrow">Treatment example</p>
+          <p className="eyebrow">Veluria · Silk Skin</p>
           <h4 className="display mt-2 text-2xl text-plum sm:text-3xl">
-            Facial rejuvenation
+            A real Veluria before &amp; after
           </h4>
           <p className="mt-4 leading-relaxed text-plum">
-            An illustration of the kind of bespoke facial rejuvenation plan
-            offered at Aesthetics Central Clinic — softening fine lines, firming
-            and refining the skin and evening overall tone for a naturally rested, more
-            youthful result that still looks like you.
+            A real Veluria Silk Skin result at Aesthetics Central Clinic. Its
+            enzymes work <em>within</em> the skin to refine texture, soften fine
+            lines and rebuild firmness — leaving the complexion smoother, more
+            even and naturally rested, while still looking like you. Drag the
+            slider and see the difference for yourself.
           </p>
 
           <div className="mt-5 flex flex-wrap gap-2">
@@ -126,7 +127,7 @@ export default function CaseStudy() {
           </div>
 
           <p className="mt-5 text-xs italic text-plum-mute">
-            Illustrative example for demonstration only. Individual results vary
+            A real client result, shared with consent. Individual results vary
             and are not guaranteed.
           </p>
         </div>

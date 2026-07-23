@@ -437,9 +437,9 @@ export default function AnalysisReport({
           the owner-supplied before/after was invisible until now. */}
       <section className="animate-fade-scale" style={{ animationDelay: "212ms" }}>
         <div className="mb-6 text-center">
-          <p className="eyebrow">Real results</p>
+          <p className="eyebrow">Real Veluria results</p>
           <h3 className="display mt-2 text-3xl text-plum">
-            An Aesthetics Central before &amp; after
+            Look at the Veluria before &amp; after
           </h3>
         </div>
         <CaseStudy />
