@@ -1,0 +1,45 @@
+# dependencies
+node_modules
+
+# next.js
+.next
+out
+build
+
+# production / vercel
+.vercel
+
+# env files (NEVER commit real keys)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env*.local
+
+# logs
+dev.log
+*.log
+npm-debug.log*
+
+# local agent / editor config
+/.claude/
+
+# scratch / QA artifacts
+/tmp/
+
+# misc
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+
+# Visual brainstorming companion
+.superpowers/
+
+# Playwright MCP test artifacts (screenshots/snapshots)
+.playwright-mcp/
+
+# Root-level QA screenshots / capture artifacts (not app assets)
+/*.png
+/*.jpeg
+/*.pdf
