@@ -7,17 +7,44 @@ type Review = {
   name: string;
 };
 
-// EMPTY ON PURPOSE — DO NOT PASTE ANOTHER CLINIC'S REVIEWS IN HERE.
+// Aesthetics Central Clinic's OWN Google reviews (Luton). Each is a faithful
+// excerpt of a real review — the reviewer's own words, trimmed to a card-sized
+// length, nothing invented or reworded. Display names are the reviewers'.
 //
-// This fork inherited O.D. Aesthetics' genuine Google and Instagram reviews,
-// which name real O.D. clients. Re-attributing them to Aesthetics Central
-// would be inventing testimonials for a business that never received them.
-// They were removed rather than reworded.
-//
-// To switch the section on, paste Aesthetics Central's OWN reviews here,
-// verbatim and correctly attributed; the section below hides itself while
-// this list is empty.
-const REVIEWS: Review[] = [];
+// DO NOT paste another clinic's reviews here. This section replaced O.D.
+// Aesthetics' inherited reviews, which named real O.D. clients; re-attributing
+// those would have been inventing testimonials. The section below hides itself
+// whenever this list is empty.
+const REVIEWS: Review[] = [
+  {
+    text: "I was very worried about my hair fall and confused about what treatment to choose. Monica guided me very well and explained everything clearly. I underwent four PRP sessions for hair loss and the results have been excellent — I'm very happy with the improvement in my hair growth. I'd highly recommend the clinic to anyone dealing with hair loss or thinning.",
+    name: "Avinash Reddy P",
+  },
+  {
+    text: "I had my first PRF treatment with Hannah today and honestly couldn't have asked for a better experience. She explained everything in detail and made me feel completely at ease. Her technique was excellent and, to my surprise, the treatment was virtually pain-free. I would highly recommend her to anyone considering PRF.",
+    name: "Rija Shahroze",
+  },
+  {
+    text: "I've just completed 4 sessions of PRF treatment and I'm genuinely amazed by the results. The entire team was warm, professional and genuinely welcoming from the very first visit. I'll definitely be booking more sessions and would highly recommend this treatment and the clinic to anyone struggling with hair loss.",
+    name: "Mohammed Zakwan",
+  },
+  {
+    text: "I cannot speak highly enough of Monica and her team. They are kind and reassuring, and everything is so clearly explained. A very detailed medical history is taken at your first appointment, which shows how professional they are. The treatment area is spotless and welcoming, with no hard sell at all. I would highly recommend.",
+    name: "Elizabeth Aldous",
+  },
+  {
+    text: "I was looking for a clinic run by medical professionals and came across Aesthetics Central. I had a very in-depth consultation with Monica and felt really confident, so booked in for Botox and lip filler. The results are fantastic and very natural. I felt very looked after the whole time — I'd really recommend Monica and the team.",
+    name: "Madeline Crook",
+  },
+  {
+    text: "Visited the clinic for the first time today and I was really pleased. Nusaybah is such a great practitioner — she made me feel at ease throughout the whole process and kept checking I was okay during the treatment. She's a credit to the team and I'll be visiting regularly for more treatments.",
+    name: "Abida S Khan",
+  },
+  {
+    text: "I drove over an hour and a half from Oxford because of the high ratings, and I can confirm the glowing reviews are 100% accurate. The clinic is pristine, modern and well-organised. A special mention to Nusaybah, who was exceptionally skilled and made me feel completely relaxed throughout. I highly recommend Aesthetics Central to anyone looking for quality treatments and a professional team.",
+    name: "Aravind Santhosh",
+  },
+];
 
 /** Lets the report hide the whole section while the list is empty. */
 export const REVIEW_COUNT = REVIEWS.length;
@@ -70,7 +97,7 @@ function ReviewCard({ review }: { review: Review }) {
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
           <span className="font-display text-lg text-plum">{review.name}</span>
           <span className="text-[0.7rem] uppercase tracking-[0.14em] text-plum-mute">
-            Verified patient
+            Google review
           </span>
         </div>
       </figcaption>
