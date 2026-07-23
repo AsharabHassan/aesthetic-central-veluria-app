@@ -7,6 +7,7 @@ import AnnotatedFace from "./AnnotatedFace";
 import BeforeAfterSlider from "./BeforeAfterSlider";
 import AfterCallouts from "./AfterCallouts";
 import ReviewsSlider, { REVIEW_COUNT } from "./ReviewsSlider";
+import CaseStudy from "./CaseStudy";
 import VeluriaRejuvenation from "./VeluriaRejuvenation";
 import { expectedImprovement } from "@/lib/expectations";
 import { planFor } from "@/lib/veluria";
@@ -430,6 +431,22 @@ export default function AnalysisReport({
           <ReviewsSlider />
         </section>
       )}
+
+      {/* Case study: a real Aesthetics Central before & after.
+          The CaseStudy component existed in the fork but was never rendered, so
+          the owner-supplied before/after was invisible until now. */}
+      <section className="animate-fade-scale" style={{ animationDelay: "212ms" }}>
+        <div className="mb-6 text-center">
+          <p className="eyebrow">Real results</p>
+          <h3 className="display mt-2 text-3xl text-plum">
+            An Aesthetics Central before &amp; after
+          </h3>
+        </div>
+        <CaseStudy />
+        <div className="mt-6 flex justify-center">
+          <PhoneConsultButton />
+        </div>
+      </section>
 
       {/* Save / open your analysis */}
       <section className="no-print animate-fade-scale" style={{ animationDelay: "220ms" }}>
