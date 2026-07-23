@@ -35,8 +35,11 @@ export function glowStrengthFromEnv(): GlowStrength {
 }
 
 export function firmnessStrengthFromEnv(): GlowStrength {
-  const n = Number(process.env.FIRMNESS_STRENGTH ?? 2);
-  return ([0, 1, 2, 3] as const).includes(n as GlowStrength) ? (n as GlowStrength) : 2;
+  // Defaults to 3, the strength the parameter sweep was tuned at. Drop it to 2
+  // for a more clinical, less marketed look — the shadow-band lift scales with
+  // it, so 2 is roughly half the crease fill.
+  const n = Number(process.env.FIRMNESS_STRENGTH ?? 3);
+  return ([0, 1, 2, 3] as const).includes(n as GlowStrength) ? (n as GlowStrength) : 3;
 }
 
 /**
@@ -125,11 +128,17 @@ async function firmnessPass(input: Buffer, strength: GlowStrength): Promise<Buff
     .png()
     .toBuffer();
 
-  // Gain about the neutral point. 2 is the measured sweet spot: at the default
-  // strength it lifts the shadow band ~13 levels while global luminance moves
-  // ~1%, so the lift is a redistribution rather than a brightening and the tone
-  // lock below has nothing to claw back.
-  const g = 2 * f;
+  // Gain about the neutral point.
+  //
+  // 4 is the measured sweet spot, tuned on REAL client photos rather than a
+  // studio shot: model output captured once, then the grade swept offline and
+  // scored on the central face region against each client's own original.
+  // At 2 — the first value, tuned on a tight studio crop — the shadow band
+  // moved +0.7 on real selfies, i.e. nothing; the creases a client actually
+  // looks at were still as deep as their own photo. 4 gives ~+8, and 6 gives
+  // ~+18 which starts to flatten the face. For reference the OLD engine scored
+  // -4.6 here: it made creases DEEPER than the client's own photo.
+  const g = 4 * f;
 
   // One-sided: floor the mask at neutral so it can only ever FILL a dip, never
   // deepen a bump. A raw DoG is symmetric and would darken exactly the cheekbone
@@ -159,10 +168,23 @@ async function firmnessPass(input: Buffer, strength: GlowStrength): Promise<Buff
 
 /** Mean luminance of the central face region — where the skin is. */
 async function faceLuminance(buf: Buffer): Promise<number> {
-  const s = await sharp(buf)
+  // The crop MUST be materialised before stats(). sharp's .stats() does not run
+  // the pipeline — it measures the INPUT image and silently ignores .resize()
+  // and .extract() ahead of it. Proven: on a half-black/half-white test image,
+  // extracting either half and calling .stats() returns 127.5 for both.
+  //
+  // This function therefore measured the WHOLE FRAME, background included, for
+  // as long as it has existed, while claiming to measure the central face. That
+  // matters because the tone lock below is the safeguard against lightening a
+  // client's skin: on a wide selfie the face can be a small part of the frame,
+  // so a bright wall or window could dominate the reading and let real facial
+  // lightening through under a measurement that looked fine.
+  const crop = await sharp(buf)
     .resize(1024, 1024, { fit: "fill" })
     .extract({ left: 352, top: 352, width: 320, height: 320 })
-    .stats();
+    .png()
+    .toBuffer();
+  const s = await sharp(crop).stats();
   return s.channels.slice(0, 3).reduce((a, c) => a + c.mean, 0) / 3;
 }
 
@@ -178,9 +200,23 @@ async function faceLuminance(buf: Buffer): Promise<number> {
  *
  * So the constraint is enforced in code instead. We compare the treated skin's
  * luminance with the original's and scale it back if it rose. The gain is
- * MULTIPLICATIVE, so the dewy specular highlights survive in proportion, and it
- * is CLAMPED AT 1.0 — this function can only ever darken toward the original,
- * never brighten. It is structurally incapable of lightening someone's skin.
+ * MULTIPLICATIVE and CLAMPED AT 1.0 — this function can only ever darken toward
+ * the original, never brighten. It is structurally incapable of lightening
+ * someone's skin.
+ *
+ * WHERE IT RUNS IS AS IMPORTANT AS WHAT IT DOES, and getting that wrong is what
+ * made the reports look flat. It used to run LAST, after our own grading — so
+ * it could not tell the model's unwanted lightening apart from the dewy sheen
+ * we had just deliberately added, and removed both. Measured over 66 real
+ * client reports from that build: the highlight band came back a median -3.9
+ * levels and 61% of clients were sent an "after" DARKER than their own photo,
+ * with the shadow band -5.2, i.e. creases slightly DEEPER. A multiplicative
+ * pull-back costs a 200-level highlight ~20 levels while costing a 50-level
+ * shadow ~5, so it flattens exactly the contrast the treated look depends on.
+ *
+ * It now runs FIRST, against the raw model output, where the drift it was
+ * written to catch actually lives. Our own grading is applied afterwards and is
+ * bounded and dialable by construction.
  */
 async function lockSkinTone(after: Buffer, original: Buffer): Promise<Buffer> {
   const [lumAfter, lumBefore] = await Promise.all([
@@ -189,11 +225,21 @@ async function lockSkinTone(after: Buffer, original: Buffer): Promise<Buffer> {
   ]);
   if (lumAfter <= 0 || lumBefore <= 0) return after;
 
-  // A few percent of drift is the glow doing its job; beyond that it is a tone shift.
-  const TOLERANCE = 1.04;
-  if (lumAfter <= lumBefore * TOLERANCE) return after;
-
-  const gain = Math.min(1, (lumBefore * TOLERANCE) / lumAfter);
+  // NORMALISE TO THE CLIENT'S OWN FACE, in both directions.
+  //
+  // This used to correct downward only, which left the model's DARKENING in
+  // place. Measured on the raw model output for real client photos, gpt-image-2
+  // hands back a face that is often dimmer than the original, so the grade had
+  // to spend its budget buying that back with global brightness — the one lever
+  // that must not be used, because raising everything is how skin gets
+  // lightened. Correcting both ways removes the drift at source and lets the
+  // grade start from parity.
+  //
+  // The TARGET IS THE CLIENT'S OWN LUMINANCE, never above it, so this cannot
+  // lighten anyone's skin: it can only put their tone back where it started.
+  // The clamp bounds a pathological correction on a badly-exposed frame.
+  const gain = Math.max(0.8, Math.min(1.25, lumBefore / lumAfter));
+  if (Math.abs(gain - 1) < 0.01) return after;
   return sharp(after).linear(gain, 0).jpeg({ quality: 95 }).toBuffer();
 }
 
@@ -209,14 +255,15 @@ export async function hydrationGrade(
    */
   firmness: GlowStrength = 0,
 ): Promise<Buffer> {
-  if (strength <= 0 && firmness <= 0) return input;
-  if (strength <= 0) {
-    const lifted = await firmnessPass(input, firmness);
-    return original ? lockSkinTone(lifted, original) : lifted;
-  }
+  // FIRST, not last: strip the model's own lightening off its raw output, before
+  // any of our grading exists for the lock to mistake for drift. See lockSkinTone.
+  const locked = original ? await lockSkinTone(input, original) : input;
+
+  if (strength <= 0 && firmness <= 0) return locked;
+  if (strength <= 0) return firmnessPass(locked, firmness);
   const s = SCALE[strength] ?? 0.75;
 
-  const raw = await sharp(input).removeAlpha().toColourspace("srgb").png().toBuffer();
+  const raw = await sharp(locked).removeAlpha().toColourspace("srgb").png().toBuffer();
   const { width = 1024, height = 1024 } = await sharp(raw).metadata();
   const min = Math.min(width, height);
 
@@ -268,10 +315,5 @@ export async function hydrationGrade(
   // structure and shadow, hydration is sheen and veil, and a treated face shows
   // both. Order matters — the structure pass wants the veil already laid down,
   // or it sharpens the veil's own softening back out.
-  const lifted = await firmnessPass(graded, firmness);
-
-  // The last word belongs to the tone lock: the treated skin may never come back
-  // lighter than the skin the client actually has. It runs after the lift too,
-  // so the shadow rolloff can never be used as a route to a brighter face.
-  return original ? lockSkinTone(lifted, original) : lifted;
+  return firmnessPass(graded, firmness);
 }
