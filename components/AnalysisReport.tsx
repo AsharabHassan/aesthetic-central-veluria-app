@@ -20,16 +20,14 @@ import {
 const BOOKING_URL =
   process.env.NEXT_PUBLIC_BOOKING_URL ?? "https://aestheticscentral.co.uk/";
 
-// Booking destination for the free consultation CTA.
-//
-// The fallback is Aesthetics Central's own contact page, NOT a calendar widget.
-// This fork inherited O.D. Aesthetics' live GHL calendar ID as its default,
-// which would have sent every Luton lead into a Swindon clinic's diary the
-// moment the env var was missing. Set NEXT_PUBLIC_CALENDAR_URL to Aesthetics
-// Central's own GHL calendar once their sub-account exists; note they have no
-// online booking today, so this app would be their first.
+// Booking destination for the free consultation CTA — Aesthetics Central's own
+// GoHighLevel calendar for the free Veluria online consultation. Overridable via
+// env for staging/testing. (The parent fork once defaulted to O.D.'s live
+// calendar ID, which would have booked Luton leads into a Swindon diary — this
+// is now Aesthetics Central's own link, so that risk is gone.)
 const CALENDAR_URL =
-  process.env.NEXT_PUBLIC_CALENDAR_URL ?? "https://aestheticscentral.co.uk/contact/";
+  process.env.NEXT_PUBLIC_CALENDAR_URL ??
+  "https://api.leadconnectorhq.com/widget/bookings/free-veluria-online-consultation";
 
 function PhoneConsultButton({
   variant = "primary",
