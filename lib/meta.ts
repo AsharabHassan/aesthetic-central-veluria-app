@@ -53,3 +53,68 @@ export function trackLead(eventId: string): void {
     window.fbq("track", "Lead", {}, { eventID: eventId });
   }
 }
+
+/**
+ * Fire a Meta event, standard or custom.
+ *
+ * The results page is a long scroll with several distinct moments on it — the
+ * preview landing, the zoom being seen, the slider being dragged, a CTA being
+ * clicked — and until now none of them were measured. We could see leads
+ * arriving and consultations not being booked, with no way to tell whether
+ * people were unmoved by the preview or never scrolled to it, which meant every
+ * change to this page was a guess.
+ *
+ * Silent when the pixel is absent, which is the local and demo case.
+ */
+export function track(
+  event: string,
+  params: Record<string, string | number> = {},
+  standard = false,
+): void {
+  if (typeof window === "undefined" || typeof window.fbq !== "function") return;
+  window.fbq(standard ? "track" : "trackCustom", event, params);
+}
+
+/**
+ * Mirror an event to the CRM so it lands on the contact's timeline and can be
+ * joined against whether they actually turned up.
+ *
+ * sendBeacon where available: these fire during scroll and on a click that
+ * navigates away, and a normal fetch is not guaranteed to survive either.
+ */
+export function trackServer(
+  email: string | null | undefined,
+  event: string,
+  detail: Record<string, string> = {},
+): void {
+  if (!email || typeof window === "undefined") return;
+  const body = JSON.stringify({
+    email,
+    event,
+    ...detail,
+    meta: {
+      event_name: event,
+      event_source_url: window.location.href,
+      fbp: getFbp(),
+      fbc: getFbc(),
+      fbclid: getFbclid(),
+    },
+  });
+  try {
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon(
+        "/api/lead/event",
+        new Blob([body], { type: "application/json" }),
+      );
+      return;
+    }
+  } catch {
+    /* fall through to fetch */
+  }
+  fetch("/api/lead/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    keepalive: true,
+  }).catch(() => {});
+}

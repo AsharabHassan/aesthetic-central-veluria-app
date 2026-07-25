@@ -1,15 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { SkinAnalysis } from "@/lib/types";
 import AnnotatedFace from "./AnnotatedFace";
 import BeforeAfterSlider from "./BeforeAfterSlider";
 import AfterCallouts from "./AfterCallouts";
+import CourseProgression from "./CourseProgression";
+import HeroZoom from "./HeroZoom";
 import ReviewsSlider, { REVIEW_COUNT } from "./ReviewsSlider";
 import CaseStudy from "./CaseStudy";
 import VeluriaRejuvenation from "./VeluriaRejuvenation";
+import { bookingUrl, planSummary, type CtaPlacement } from "@/lib/booking";
 import { expectedImprovement } from "@/lib/expectations";
+import type { HeroZone } from "@/lib/hero";
+import { track, trackServer } from "@/lib/meta";
 import { planFor } from "@/lib/veluria";
 import { DISCLAIMER_FULL } from "@/lib/legal";
 import {
@@ -33,13 +38,19 @@ const CALENDAR_URL =
 function PhoneConsultButton({
   variant = "primary",
   className = "",
+  href = CALENDAR_URL,
+  onClick,
 }: {
   variant?: "primary" | "ghost";
   className?: string;
+  /** Built by lib/booking.ts so the matched plan travels with the click. */
+  href?: string;
+  onClick?: () => void;
 }) {
   return (
     <a
-      href={CALENDAR_URL}
+      href={href}
+      onClick={onClick}
       target="_blank"
       rel="noopener noreferrer"
       className={`${variant === "primary" ? "btn-serum" : "btn-ghost"} ${className}`}
@@ -198,7 +209,10 @@ export default function AnalysisReport({
   afterPending,
   mapImage,
   mapPending,
+  hero,
   analysis,
+  email,
+  name,
   onRestart,
 }: {
   before: string;
@@ -206,7 +220,13 @@ export default function AnalysisReport({
   afterPending: boolean;
   mapImage: string | null;
   mapPending: boolean;
+  /** The single area the preview leads on — see lib/hero.ts. */
+  hero?: HeroZone | null;
   analysis: SkinAnalysis;
+  /** Aesthetics Central has no CRM yet, so these are optional: without an
+   *  email the funnel events fire to the pixel only and skip the server. */
+  email?: string | null;
+  name?: string | null;
   onRestart: () => void;
 }) {
   const [lightbox, setLightbox] = useState<string | null>(null);
@@ -224,7 +244,76 @@ export default function AnalysisReport({
     })),
   );
 
+  const heroZoomRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  // Every funnel event fires at most once per report. Without this, the
+  // observers below would re-fire on each scroll past and the counts would
+  // measure scrolling rather than reach.
+  const fired = useRef<Set<string>>(new Set());
+
   useEffect(() => setMounted(true), []);
+
+  const planText = planSummary(previewPlan);
+
+  /** Browser pixel + CRM timeline, once each. */
+  const fire = useCallback(
+    (event: string, detail: Record<string, string> = {}, standard = false) => {
+      if (fired.current.has(event)) return;
+      fired.current.add(event);
+      track(event, { plan: planText, focus: hero?.area ?? "", ...detail }, standard);
+      trackServer(email, event, { plan: planText, focus: hero?.area ?? "", ...detail });
+    },
+    [email, planText, hero?.area],
+  );
+
+  const ctaHref = (placement: CtaPlacement) =>
+    bookingUrl(CALENDAR_URL, {
+      plan: previewPlan,
+      hero,
+      name,
+      email,
+      placement,
+    });
+
+  /**
+   * A CTA click is the one event allowed to fire more than once per report:
+   * `fired` is keyed by event name, so a second click from a different part of
+   * the page would otherwise be swallowed and we would lose the placement
+   * comparison that the utm_content param exists to answer.
+   */
+  const onBookingClick = (placement: CtaPlacement) => () => {
+    track("Schedule", { plan: planText, focus: hero?.area ?? "", placement }, true);
+    trackServer(email, "BookingClicked", {
+      plan: planText,
+      focus: hero?.area ?? "",
+      placement,
+    });
+  };
+
+  // Reach events: did they get to the preview, the zoom, the end of the report.
+  useEffect(() => {
+    const targets: [React.RefObject<HTMLElement | null>, string][] = [
+      [previewRef, "PreviewViewed"],
+      [heroZoomRef, "HeroZoomViewed"],
+      [bottomRef, "ReportCompleted"],
+    ];
+    const observers = targets.map(([ref, event]) => {
+      const el = ref.current;
+      if (!el) return null;
+      const io = new IntersectionObserver(
+        ([entry]) => {
+          if (entry.isIntersecting) {
+            fire(event);
+            io.disconnect();
+          }
+        },
+        { threshold: 0.4 },
+      );
+      io.observe(el);
+      return io;
+    });
+    return () => observers.forEach((io) => io?.disconnect());
+  }, [fire, after]);
 
   const handlePdf = async () => {
     setPdfBusy(true);
@@ -281,7 +370,11 @@ export default function AnalysisReport({
                 annotations={analysis.annotations}
                 categories={analysis.categories}
               >
-                <BeforeAfterSlider before={before} after={after} />
+                <BeforeAfterSlider
+                  before={before}
+                  after={after}
+                  onDrag={() => fire("SliderDragged")}
+                />
               </AfterCallouts>
             </div>
             <div className="sheen-line rounded-[1.6rem]" />
@@ -307,6 +400,28 @@ export default function AnalysisReport({
           course stops, which is an argument for a repeat course rather than a
           weakness to hide.
         */}
+        {/*
+          The zoom is the thing that makes the change legible — a whole-face
+          slider asks people to diff two faces from memory, which is exactly the
+          comparison the eye is worst at. It goes directly under the slider,
+          before anything else competes for attention, and the CTA that follows
+          is the one at peak impact.
+        */}
+        {after && hero && (
+          <div ref={heroZoomRef}>
+            <HeroZoom before={before} after={after} hero={hero} />
+          </div>
+        )}
+
+        {after && (
+          <CourseProgression
+            before={before}
+            after={after}
+            plan={previewPlan}
+            onStep={(key) => fire("ProgressionStepped", { step: key })}
+          />
+        )}
+
         {after && previewPlan.length > 0 && (
           <div className="mt-5 rounded-2xl border border-white/70 bg-white/55 p-4 text-center backdrop-blur-sm">
             <p className="text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-plum-soft">
@@ -335,7 +450,10 @@ export default function AnalysisReport({
           and are not guaranteed. Not medical advice.
         </p>
         <div className="mt-6 flex flex-col items-center gap-2">
-          <PhoneConsultButton />
+          <PhoneConsultButton
+            href={ctaHref(hero ? "hero-zoom" : "preview")}
+            onClick={onBookingClick(hero ? "hero-zoom" : "preview")}
+          />
           <p className="text-xs text-plum-mute">
             Discuss your preview with our team — no cost, no obligation.
           </p>
@@ -415,7 +533,12 @@ export default function AnalysisReport({
       <section className="animate-fade-scale" style={{ animationDelay: "200ms" }}>
         <VeluriaRejuvenation
           categories={analysis.categories}
-          cta={<PhoneConsultButton />}
+          cta={
+            <PhoneConsultButton
+              href={ctaHref("rejuvenation")}
+              onClick={onBookingClick("rejuvenation")}
+            />
+          }
         />
       </section>
 
@@ -444,7 +567,10 @@ export default function AnalysisReport({
         </div>
         <CaseStudy />
         <div className="mt-6 flex justify-center">
-          <PhoneConsultButton />
+          <PhoneConsultButton
+            href={ctaHref("case-study")}
+            onClick={onBookingClick("case-study")}
+          />
         </div>
       </section>
 
@@ -490,7 +616,10 @@ export default function AnalysisReport({
           Ready when you are
         </h3>
         <div className="flex flex-wrap items-center justify-center gap-3">
-          <PhoneConsultButton />
+          <PhoneConsultButton
+            href={ctaHref("footer")}
+            onClick={onBookingClick("footer")}
+          />
           <a href={BOOKING_URL} target="_blank" rel="noopener noreferrer" className="btn-ghost">
             Explore treatments
           </a>
@@ -510,6 +639,9 @@ export default function AnalysisReport({
           </p>
         </div>
       </section>
+
+      {/* Reach sentinel: they got to the end of the report. */}
+      <div ref={bottomRef} aria-hidden="true" className="h-px w-full" />
 
       {/* Full-size image lightbox */}
       {lightbox && (

@@ -5,9 +5,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export default function BeforeAfterSlider({
   before,
   after,
+  onDrag,
 }: {
   before: string;
   after: string;
+  /** Fired once, the first time the person takes hold of the handle. */
+  onDrag?: () => void;
 }) {
   // Start on the BEFORE, then sweep across once the image lands.
   const [pos, setPos] = useState(100);
@@ -88,6 +91,7 @@ export default function BeforeAfterSlider({
 
   const onPointerDown = (e: React.PointerEvent) => {
     dragging.current = true;
+    if (!grabbed.current) onDrag?.();
     grabbed.current = true; // hand control to the person; the sweep stops
     sweptOnce.current = true;
     containerRef.current?.setPointerCapture(e.pointerId);

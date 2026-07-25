@@ -1,5 +1,8 @@
 import type { LeadPayload, SkinAnalysis } from "./types";
+import { planSummary } from "./booking";
+import { heroZone } from "./hero";
 import { META_PIXEL_ID } from "./meta";
+import { planFor } from "./veluria";
 
 /** Meta Conversions API fields forwarded to GHL for server-side event matching. */
 export interface GhlMeta {
@@ -124,6 +127,51 @@ export function buildConcernsPayload(
       .join(", "),
     skin_summary: analysis.summary,
     veluria_recommendation: analysis.veluriaRecommendation,
+
+    // The matched plan and the headline area, derived here from the analysis
+    // rather than taken from the client. The CRM then holds what the client was
+    // actually shown even when they never click through to the calendar, so a
+    // consultation can open on their concern instead of a blank slot request.
+    veluria_plan: planSummary(
+      planFor(
+        analysis.annotations.map((a) => ({ area: a.area, concern: a.concern })),
+      ),
+    ),
+    focus_area: heroZone(analysis.annotations, analysis.categories)?.area ?? "",
+  };
+}
+
+/**
+ * A results-page funnel event (preview seen, zoom seen, CTA clicked, …).
+ *
+ * Deliberately the same flat shape as the other two webhooks so one GHL inbound
+ * hook can branch on `event_name`, and carries only an email plus the event —
+ * these fire repeatedly per session and must stay cheap.
+ */
+export function buildEventPayload(
+  email: string,
+  event: string,
+  detail: { plan?: string; focus?: string; placement?: string } = {},
+  meta: GhlMeta = {},
+) {
+  return {
+    email: email.trim().toLowerCase(),
+    source: "Skin Analysis Lead Magnet",
+    event_name: event,
+    occurred_at: new Date().toISOString(),
+    veluria_plan: detail.plan ?? "",
+    focus_area: detail.focus ?? "",
+    cta_placement: detail.placement ?? "",
+
+    pixel_id: META_PIXEL_ID,
+    action_source: "website",
+    event_id: meta.event_id ?? "",
+    event_source_url: meta.event_source_url ?? "",
+    fbp: meta.fbp ?? "",
+    fbc: meta.fbc ?? "",
+    fbclid: meta.fbclid ?? "",
+    client_user_agent: meta.client_user_agent ?? "",
+    client_ip_address: meta.client_ip_address ?? "",
   };
 }
 

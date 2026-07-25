@@ -8,6 +8,7 @@ import {
   hydrationGrade,
 } from "@/lib/glow";
 import { planFor } from "@/lib/veluria";
+import type { HeroFocus } from "@/lib/hero";
 
 export const runtime = "nodejs";
 // A medium-quality gpt-image-2 edit measures 55-105s on this prompt; 120s left
@@ -26,7 +27,27 @@ function parseConcerns(input: unknown): ConcernArea[] {
       concern: typeof c.concern === "string" ? c.concern.trim() : "",
     }))
     .filter((c) => c.area.length > 0)
-    .slice(0, 4);
+    // Six, to match buildAfterImagePrompt's own slice. This was 4, so
+    // annotations 5 and 6 were silently dropped before the prompt ever saw
+    // them — and with the hero now ordered first by the client, truncating
+    // early could also have cut the headline area itself.
+    .slice(0, 6);
+}
+
+/**
+ * The headline area, chosen client-side by lib/hero.ts so the report and the
+ * image agree on which concern leads. Untrusted input, so it is re-validated
+ * here rather than cast.
+ */
+function parseHero(input: unknown): HeroFocus | null {
+  if (typeof input !== "object" || input === null) return null;
+  const o = input as Record<string, unknown>;
+  const area = typeof o.area === "string" ? o.area.trim() : "";
+  if (!area) return null;
+  return {
+    area,
+    concern: typeof o.concern === "string" ? o.concern.trim() : "",
+  };
 }
 
 const EXT: Record<string, string> = {
@@ -60,6 +81,7 @@ export async function POST(req: Request) {
     areas?: unknown;
     quality?: unknown;
     annotate?: unknown;
+    hero?: unknown;
   };
   try {
     body = await req.json();
@@ -75,6 +97,7 @@ export async function POST(req: Request) {
     );
   }
   const concerns = parseConcerns(body.areas);
+  const hero = parseHero(body.hero);
   // Quality drives the speed/fidelity trade. The client fires a fast "low"
   // preview and a "medium" refinement (a two-pass, streaming-like reveal).
   // "high" runs a ~3-minute review loop, so it is intentionally not allowed.
@@ -93,7 +116,12 @@ export async function POST(req: Request) {
 
     // Real Veluria "after" skin references (empty array → text-only fallback).
     const references = await getReferenceImages();
-    const prompt = buildAfterImagePrompt(concerns, references.length > 0, annotate);
+    const prompt = buildAfterImagePrompt(
+      concerns,
+      references.length > 0,
+      annotate,
+      hero,
+    );
 
     const result = await client.images.edit({
       model: "gpt-image-2",

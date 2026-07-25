@@ -59,7 +59,11 @@ export const VELURIA_PRODUCTS: Record<VeluriaProductId, VeluriaProduct> = {
     id: "silk-skin",
     name: "Veluria Silk Skin",
     tagline: "Skin quality & texture — the “glass skin” refiner",
-    actives: "Collagenase G&H, PDRN, palmitoyl pentapeptide-4, Centella asiatica, hyaluronic acid",
+    // sh-Oligopeptide-1 is EGF, and it is on the INCI: the solution vial lists
+    // Sodium DNA (PDRN), sodium hyaluronate, palmitoyl pentapeptide-4, Centella
+    // asiatica and sh-Oligopeptide-1. We were naming four of the five.
+    actives:
+      "Collagenase G&H, PDRN, palmitoyl pentapeptide-4, sh-oligopeptide-1 (EGF), Centella asiatica, hyaluronic acid",
     sessions: 3,
     treats: [
       "rough, uneven texture and enlarged-looking pores",
@@ -89,7 +93,10 @@ export const VELURIA_PRODUCTS: Record<VeluriaProductId, VeluriaProduct> = {
   "pearl-tone": {
     id: "pearl-tone",
     name: "Veluria Pearl Tone",
-    tagline: "Even tone & radiance — the brightener",
+    // Pearl Tone's solution vials are 10ml against 5ml for the other two, so a
+    // course genuinely covers the neck and décolleté as well as the face. Worth
+    // saying: pigment and sun damage rarely stop at the jaw.
+    tagline: "Even tone & radiance — the brightener, for face and neck",
     actives: "Collagenase G&H, glutathione, hyaluronic acid",
     sessions: 3,
     treats: [

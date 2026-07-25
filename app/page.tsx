@@ -7,6 +7,7 @@ import Processing from "@/components/Processing";
 import AnalysisReport from "@/components/AnalysisReport";
 import type { SkinAnalysis, LeadPayload } from "@/lib/types";
 import type { GhlMeta } from "@/lib/ghl";
+import { heroFirst, heroZone, type HeroZone } from "@/lib/hero";
 import { DISCLAIMER_SHORT } from "@/lib/legal";
 
 type Step = "welcome" | "capture" | "form" | "processing" | "result" | "error";
@@ -21,6 +22,10 @@ export default function Home() {
   const [afterPending, setAfterPending] = useState(false);
   const [mapImage, setMapImage] = useState<string | null>(null);
   const [mapPending, setMapPending] = useState(false);
+  // The single area the preview leads on — see lib/hero.ts. Held here rather
+  // than recomputed in the report so the image and the on-page zoom are
+  // guaranteed to be talking about the same part of the face.
+  const [hero, setHero] = useState<HeroZone | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>("");
   // Guards the one-shot report delivery so a given analysis emails the PDF once.
   const reportSent = useRef(false);
@@ -35,6 +40,7 @@ export default function Home() {
     setAfterPending(false);
     setMapImage(null);
     setMapPending(false);
+    setHero(null);
     setErrorMsg("");
     setStep("welcome");
   };
@@ -44,11 +50,18 @@ export default function Home() {
     quality: "low" | "medium",
     areas: { area: string; concern: string }[] = [],
     annotate = false,
+    hero: HeroZone | null = null,
   ) =>
     fetch("/api/transform", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image, quality, areas, annotate }),
+      body: JSON.stringify({
+        image,
+        quality,
+        areas,
+        annotate,
+        hero: hero ? { area: hero.area, concern: hero.concern } : null,
+      }),
     })
       .then(async (r) => {
         const d = await r.json().catch(() => ({}));
@@ -142,11 +155,21 @@ export default function Home() {
       }).catch(() => {});
     }
 
-    const concerns =
+    // The headline area, and it must lead the concern list: the prompt weights
+    // its first bullet most heavily and the route caps the list at six.
+    const heroArea = heroZone(
+      analysisResult.annotations,
+      analysisResult.categories,
+    );
+    setHero(heroArea);
+
+    const concerns = heroFirst(
       analysisResult.annotations?.map((a) => ({
         area: a.area,
         concern: a.concern,
-      })) ?? [];
+      })) ?? [],
+      heroArea,
+    );
 
     const mapZones =
       analysisResult.annotations?.map((a) => ({
@@ -165,14 +188,14 @@ export default function Home() {
     // second, hence the flag.
     let refined = false;
 
-    fetchAfter(image, "low", concerns, false).then((preview) => {
+    fetchAfter(image, "low", concerns, false, heroArea).then((preview) => {
       if (preview && !refined) {
         setAfterImage(preview);
         setAfterPending(false);
       }
     });
 
-    const afterPromise = fetchAfter(image, "medium", concerns, false).then(
+    const afterPromise = fetchAfter(image, "medium", concerns, false, heroArea).then(
       (afterImg) => {
         if (afterImg) {
           refined = true;
@@ -354,7 +377,10 @@ export default function Home() {
             afterPending={afterPending}
             mapImage={mapImage}
             mapPending={mapPending}
+            hero={hero}
             analysis={analysis}
+            email={lead?.email ?? null}
+            name={lead?.name ?? null}
             onRestart={reset}
           />
         )}

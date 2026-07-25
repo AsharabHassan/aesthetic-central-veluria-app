@@ -1,11 +1,12 @@
 import { planFor } from "@/lib/veluria";
+import type { HeroFocus } from "@/lib/hero";
 
 export const ANALYSIS_SYSTEM_PROMPT = `You are a senior aesthetic skin consultant at Aesthetics Central Clinic, a science-led UK aesthetics clinic specialising in natural results and medically precise treatments. A prospective client has uploaded a selfie for a complimentary AI skin assessment built around ONE treatment: Veluria by PB Serum.
 
 ABOUT VELURIA — the ONLY treatment range you may mention by name:
 Veluria is PB Serum's professional BIOREMODELING range. Every product is built on recombinant Collagenase G&H, which breaks down disorganised collagen and stimulates new collagen — so it rebuilds skin quality rather than simply hydrating it. It is delivered by microneedling (or injection) as a course. The clinic offers THREE Veluria products for skin, and each one addresses DIFFERENT concerns. Match the client's concern to the right product:
 
-1. VELURIA SILK SKIN (Collagenase G&H, PDRN, peptide, Centella asiatica, hyaluronic acid) — 3-session course. Skin quality and texture:
+1. VELURIA SILK SKIN (Collagenase G&H, PDRN, palmitoyl pentapeptide-4, sh-oligopeptide-1, Centella asiatica, hyaluronic acid) — 3-session course. Skin quality and texture:
    - rough, uneven texture and enlarged-looking pores; "glass skin" refinement
    - dull, tired, dehydrated skin; hydration, plumpness and glow
    - fine surface lines and crepiness
@@ -18,13 +19,14 @@ Veluria is PB Serum's professional BIOREMODELING range. Every product is built o
    - FOREHEAD LINES, frown lines and crow's feet — DMAE has controlled-trial evidence for visibly softening forehead and periorbital lines. They become shallower and less etched; they are never erased and the face never loses its expression.
    - tired, devitalised skin
 
-3. VELURIA PEARL TONE (Collagenase G&H, glutathione, hyaluronic acid) — 3-session course. Tone and radiance:
+3. VELURIA PEARL TONE (Collagenase G&H, glutathione, hyaluronic acid) — 3-session course, and the vials are double the volume of the other two, so a course covers the neck and décolleté as well as the face. Tone and radiance:
    - uneven skin tone and visible colour differences
    - sun spots, age spots and hyperpigmentation — SOFTENED and evened, never erased
    - post-inflammatory marks left by old breakouts
    - a dull, sallow complexion — brightened into radiance
 
 HOW TO PHRASE IT: always an APPEARANCE claim, never a medical one. Veluria "softens and evens the appearance of" pigmentation; it does not remove it. It "calms irritated-looking redness"; it does not remove blood vessels. It "brightens"; it NEVER lightens or whitens someone's natural skin tone. Never guarantee an outcome.
+Prefer the manufacturer's own wording wherever it fits — it is the safest form of every claim we make, and it is already appearance-level: Veluria "refines skin texture", "enhances radiance", "improves the appearance of skin firmness", "boosts luminosity", and "helps reduce the appearance of uneven tone".
 
 ACTIVE ACNE vs POST-ACNE MARKS — get this distinction right, it is the most important one you make:
 - A spot that is RAISED, red or inflamed is ACTIVE acne. Veluria does NOT treat it. Say so.
@@ -177,22 +179,46 @@ function targetedAfterAction(area: string, concern: string): string {
  * same pose/crop/framing/lighting, with only skin QUALITY improved. The app
  * keeps the untouched selfie as the "before", so the before is never altered.
  *
- * Shape matters as much as content, and both are load-bearing:
- *  - The visible-change demand comes FIRST and is restated LAST. An earlier
- *    version ended on restrictions; the model took the last word as licence to
- *    hold back and returned images barely distinguishable from the input.
- *  - Preservation is stated ONCE, positively ("copy these across exactly"),
- *    not as a wall of DO-NOTs. gpt-image-2 follows positive preservation far
- *    more reliably than negation, and repeating the restrictions three times
- *    suppressed the improvement altogether.
+ * Shape matters as much as content, and every structural choice here is
+ * load-bearing:
  *
- * Both properties are verified together: the glow must be obvious AND redness,
- * pigmentation, blemishes, scars and deep folds must survive the edit intact.
+ *  - ONE AREA LEADS. The prompt used to ask for improvement everywhere at once
+ *    and got it: a uniform shift across the whole face, which is the hardest
+ *    kind of change for a person to see, because the eye compares locally
+ *    against a reference and is close to blind to a global one. Clients read
+ *    "everything moved a little" as "nothing happened". The hero zone (see
+ *    lib/hero.ts) now gets the largest change in the image and is cropped out
+ *    at 2x next to the same crop of the original, which is the comparison the
+ *    full-face slider never makes.
+ *
+ *  - IMPROVEMENT OUTWEIGHS RESTRICTION. It did not use to. The prompt carried
+ *    four separate preservation sections, a shouted tone lock in the opening
+ *    slot and a closing tone check, against six improvement bullets — roughly
+ *    70% of the text was telling the model what NOT to do. gpt-image-2 is
+ *    already biased toward handing its input back unchanged, so a restriction
+ *    majority is a thumb on the scale for "return the photo". Preservation is
+ *    now stated ONCE, positively, as a copy-across checklist.
+ *
+ *  - THE TONE LOCK MOVED, IT DID NOT WEAKEN. It is enforced in code by
+ *    lockSkinTone (lib/glow.ts), which is multiplicatively clamped at parity
+ *    and structurally incapable of lightening anyone's skin. Repeating it three
+ *    times in the prompt bought nothing the code does not already guarantee and
+ *    cost the improvement its share of the model's attention. The freckle rule
+ *    stays prominent, because that one the code genuinely cannot enforce.
+ *
+ *  - THE LAST WORD IS THE DEMAND. The prompt ends on "make the change obvious",
+ *    never on a constraint. An earlier version closed on the tone check and the
+ *    model took the final instruction as licence to hold back.
+ *
+ * Both properties are verified together: the change must be obvious AND
+ * redness, pigmentation, blemishes, scars, vessels and facial volume must
+ * survive the edit intact.
  */
 export function buildAfterImagePrompt(
   concerns: ConcernArea[],
   hasReferences: boolean,
   annotate = false,
+  hero: HeroFocus | null = null,
 ): string {
   const list: ConcernArea[] =
     concerns.length > 0
@@ -203,7 +229,22 @@ export function buildAfterImagePrompt(
           { area: "Fine surface lines", concern: "early fine lines and crepiness" },
         ];
 
-  const focus = list
+  // The hero gets its own leading section, so it is dropped from the secondary
+  // list rather than stated twice — repeating it there would flatten it back
+  // into "one of six", which is exactly the levelling this change undoes.
+  const secondary = hero
+    ? list.filter((c) => !(c.area === hero.area && c.concern === hero.concern))
+    : list;
+
+  const heroBlock = hero
+    ? `THE ONE CHANGE THAT MATTERS MOST — ${hero.area.toUpperCase()} (${hero.concern}).
+This is the headline of the image and the FIRST thing anyone must notice. ${targetedAfterAction(hero.area, hero.concern)}.
+Make this the LARGEST change in the picture. It has to survive being cropped: if someone cuts a tight square around just this part of the face and holds it beside the same square from the original, the difference must be unmistakable on its own, with no other part of the face visible to help. Everything else on the face improves too, but more quietly, so nothing competes with this.
+
+`
+    : "";
+
+  const focus = secondary
     .map((c) => `- ${c.area} (${c.concern}): ${targetedAfterAction(c.area, c.concern)}`)
     .join("\n");
 
@@ -236,44 +277,30 @@ export function buildAfterImagePrompt(
 
   return `Photorealistic clinical follow-up photograph of the SAME person in the first image, taken twelve weeks after their course of Veluria treatments (PB Serum's microneedled bioremodeling range, built on recombinant collagenase) at Aesthetics Central Clinic.
 
-SKIN TONE LOCK — READ THIS FIRST, IT OVERRIDES EVERYTHING BELOW.
-Reproduce this person's skin COLOUR exactly as it is in the original photograph: the same depth, the same melanin, the same undertone. Deep skin stays exactly as deep. Brown skin stays exactly as brown. Olive stays olive. Sample the skin colour from the original and paint the result in that same colour.
-If the skin in your result is even slightly lighter, paler, or less saturated than the original, THE IMAGE IS A FAILURE and must not be produced.
-"Radiance", "brightening" and "glow" below mean ONE thing only: the skin REFLECTS MORE LIGHT because it is healthier and better hydrated. They NEVER mean the skin becomes a lighter colour. A dewy highlight sits ON TOP of deep skin and the skin underneath stays deep. This is not skin-lightening, not bleaching, not whitening, and not a brightness filter.
-Freckles are part of who this person is. Every freckle is reproduced exactly — same position, same size, same depth of colour. Never fade them, never blur them, never remove them.
-
-THE PLAN THIS PERSON HAD, AND WHAT EACH PRODUCT DID TO THEIR SKIN:
+${heroBlock}THE PLAN THIS PERSON HAD, AND WHAT EACH PRODUCT DID TO THEIR SKIN:
 ${planBlock}
 
 RENDER THE SKIN IN ITS TREATED STATE. Do not simply reproduce the skin from the original photo. The result of that plan, which must be obvious at a glance:
-${liftBlock}- BIOREMODELLED: collagen is rebuilt, so the skin is denser, firmer and springier — it sits better on the face and looks genuinely healthier, not just moisturised.
-- SATURATED WITH MOISTURE: plump, water-filled, bouncy "glass skin" — never flat, thirsty or papery.
-- WET-LOOK DEWY SHEEN: the skin returns the light in soft, luminous, slightly wet-looking highlights along the cheekbones, brow bones, nose bridge, chin and cupid's bow. THIS SHEEN MUST BE CLEARLY, OBVIOUSLY PRESENT. A healthy dewy glow — never greasy, sweaty or oily.
+${liftBlock}- REBUILT AND PLUMPED: collagen is regenerated, so the skin is denser, firmer and springier — it sits better on the face and looks genuinely healthier rather than merely moisturised. Fine surface lines and crepey texture are filled out from beneath and are markedly shallower.
+- SATURATED AND DEWY: plump, water-filled, bouncy "glass skin", and it returns the light in soft, luminous, slightly wet-looking highlights along the cheekbones, brow bones, nose bridge, chin and cupid's bow. THIS SHEEN MUST BE CLEARLY, OBVIOUSLY PRESENT — a healthy dewy glow, never greasy, sweaty or oily, and never flat, thirsty or papery.
 - SILK TEXTURE: the surface is resurfaced smooth, even and refined. Dryness, flakiness, roughness and crepiness are gone. Pores stay visible but read tight and clean.
-- PLUMPED: fine surface lines and crepey texture are filled out from beneath and are markedly shallower.
 - RESTED: the skin under the eyes is rebuilt — thicker, firmer, smoother and far less crepey — so the area reads visibly brighter, less shadowed and awake, and any pigment stain there is softened. The SOCKET IS NOT FILLED: if there is a true hollow from lost volume, its shape and depth are exactly as in the original. No filler-style plumping of the tear trough, and no puffiness added.
 
-CONCENTRATE THE IMPROVEMENT HERE:
+${hero ? "IMPROVE THESE TOO, MORE QUIETLY THAN THE HEADLINE AREA ABOVE:" : "CONCENTRATE THE IMPROVEMENT HERE:"}
 ${focus}
 
-WHAT VELURIA STILL CANNOT DO — reproduce every one of these EXACTLY as in the original: same position, same size, same shape, same colour. Let the improved skin appear around and between them:
-- EVERY SPOT THAT IS RAISED, RED OR INFLAMED. This is the hard line, and it matters most of all. If a blemish stands proud of the skin, or is red/angry/inflamed, it is ACTIVE acne: Veluria does not treat it, and it must appear in the result completely untouched — same size, same redness, same position. COUNT THEM: every single raised or red spot in the original must still be there in the result. Removing even one is a FAILED image.
-- every visible blood vessel, thread vein and broken capillary (vascular — needs light-based treatment)
-- every mole, skin tag, beauty spot and FRECKLE (never treated, never altered — freckles are part of the person, not a flaw)
-- FACIAL VOLUME. Every deep static fold, every hollow and every loss of volume keeps its original shape, position and depth. Firmer skin makes a fold read a little softer, and firmer under-eye skin makes the area read less shadowed — but nothing is ever FILLED IN. Veluria is not a filler: no plumping of the tear trough, no filling of the nasolabial or marionette folds, no added volume anywhere on the face.
-- the person's identity, face shape, bone structure, ethnicity, real skin tone, apparent age, hair, beard, expression, head angle, crop, framing, background, and the direction and colour of the lighting. The result must overlay the original 1:1.
+COPY THESE ACROSS EXACTLY FROM THE ORIGINAL — same position, same size, same shape, same colour — and let the improved skin appear around and between them:
+- EVERY SPOT THAT IS RAISED, RED OR INFLAMED. This is the hard line and it matters most of all. A blemish that stands proud of the skin, or is red, angry or inflamed, is ACTIVE acne: Veluria works on the flat marks acne leaves behind, not on active acne. COUNT THEM — every single raised or red spot in the original is still there in the result, same size, same redness, same position. Removing even one is a FAILED image. If you are unsure whether a blemish is active or a flat mark, treat it as ACTIVE and leave it completely untouched.
+- Every visible blood vessel, thread vein and broken capillary — vascular, and Veluria does not remove them.
+- Every mole, skin tag, beauty spot and FRECKLE. Freckles are part of who this person is, not a flaw: same position, same size, same depth of colour, never faded, never blurred, never removed.
+- FACIAL VOLUME. Every deep static fold, every hollow and every loss of volume keeps its original shape, position and depth. Firmer skin makes a fold read a little softer and firmer under-eye skin makes the area read less shadowed — but nothing is ever FILLED IN. Veluria is not a filler: no plumping of the tear trough, no filling of the nasolabial or marionette folds, no added volume anywhere.
+- The person's identity, face shape, bone structure, ethnicity, apparent age, hair, beard, expression, head angle, crop, framing, background, and the direction and colour of the lighting. The result must overlay the original 1:1.
+- THEIR SKIN COLOUR. Sample it from the original and paint the result in that same colour: same depth, same melanin, same undertone. Deep skin stays exactly as deep, brown stays brown, olive stays olive. "Radiance", "brightening" and "glow" above mean ONE thing — the skin REFLECTS MORE LIGHT because it is healthier and better hydrated. A dewy highlight sits ON TOP of deep skin and the skin underneath stays deep. This is never lightening, bleaching, whitening or a brightness filter.
+- Real pores and true skin micro-texture. Never airbrushed, plastic, waxy or blurred. No make-up, no reshaping or slimming of the face.
 
-SOFTENED, NOT ERASED — and be precise about WHAT may soften:
-- A FLAT mark — a brown or pink patch of discolouration lying level with the skin, left behind by an old spot, or a sun spot or age spot — MAY become fainter and less contrasted. It still sits in exactly the same place; it is simply less obvious.
-- A LINE OR CREASE — forehead lines, frown lines, crow's feet, fine lines — MAY become clearly shallower and softer. It stays in exactly the same place and the face keeps its expression; the skin around it is never flattened into a blank, waxy, featureless plane.
-- A RAISED or RED or INFLAMED spot MAY NOT change at all. Ever. It is active, and it stays exactly as it is.
-If you are unsure whether a blemish is active or a flat mark, treat it as ACTIVE and leave it completely untouched. Nothing is ever deleted, and the person's real skin tone is never lightened or whitened.
+WHAT MAY CHANGE, precisely: a FLAT mark lying level with the skin — an old post-acne mark, a sun spot, an age spot — may become fainter and less contrasted, still in exactly the same place, simply less obvious. A LINE OR CREASE may become clearly shallower and softer, still in exactly the same place, with the face keeping its expression and the skin around it never flattened into a blank waxy plane. A RAISED, RED or INFLAMED spot may not change at all, ever.
 
-Keep real pores and true skin micro-texture. Never airbrushed, plastic, waxy or blurred. No make-up, no reshaping or slimming of the face, no filler-style volume.
-
-Both truths at once: the things Veluria cannot treat are still plainly there, and the skin carrying them is unmistakably firmer, tighter, clearer, more even and more radiant. Side by side with the original, a viewer must instantly say "their skin looks incredible". If the skin has barely changed, the image is a FAILURE — and if the ONLY change is that the skin looks wetter and more moisturised, while it still hangs exactly as it did and every line is still cut exactly as deep, that is ALSO a failure. The skin must look genuinely REBUILT, not merely hydrated.
-
-FINAL CHECK BEFORE YOU OUTPUT: is the skin the same COLOUR and the same DEPTH of tone as the original, with every freckle still in place? If it is lighter, paler or less saturated, or if freckles have faded, discard it and render it again at the original skin tone.${pointerBlock}${referenceLine}`;
+Both truths at once: the things Veluria cannot treat are still plainly there, and the skin carrying them is unmistakably firmer, tighter, clearer, more even and more radiant. Side by side with the original — and especially in a tight crop of the headline area — a viewer must instantly say "their skin looks incredible". If the skin has barely changed, the image is a FAILURE. If the ONLY change is that the skin looks wetter and more moisturised, while it still hangs exactly as it did and every line is still cut exactly as deep, that is ALSO a failure. The skin must look genuinely REBUILT, not merely hydrated.${pointerBlock}${referenceLine}`;
 }
 
 /**
