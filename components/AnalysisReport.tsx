@@ -6,7 +6,6 @@ import type { SkinAnalysis } from "@/lib/types";
 import AnnotatedFace from "./AnnotatedFace";
 import BeforeAfterSlider from "./BeforeAfterSlider";
 import AfterCallouts from "./AfterCallouts";
-import CourseProgression from "./CourseProgression";
 import ConcernZooms from "./ConcernZooms";
 import ScoreDestination from "./ScoreDestination";
 import VeluriaStack from "./VeluriaStack";
@@ -242,7 +241,7 @@ function StickyCta({
               of what a persistent CTA is for.
             */}
             <span className="hidden text-sm font-medium text-plum sm:inline">
-              Talk it through with Dr Sha
+              Talk it through with our team
             </span>
             <a
               href={href}
@@ -460,7 +459,7 @@ export default function AnalysisReport({
                 label="Book your free consultation"
               />
               <p className="text-xs text-plum-mute">
-                15 minutes with Dr Sha — no cost, no obligation.
+                15 minutes with our team — no cost, no obligation.
               </p>
             </>
           }
@@ -541,18 +540,11 @@ export default function AnalysisReport({
               label="Get this result — book free"
             />
             <p className="text-xs text-plum-mute">
-              Dr Sha will confirm what your skin needs to get there.
+              Our team will confirm what your skin needs to get there.
             </p>
           </div>
         )}
 
-        {after && (
-          <CourseProgression
-            before={before}
-            after={after}
-            onStep={(key) => fire("ProgressionStepped", { step: key })}
-          />
-        )}
 
         {after && programme.length > 0 && (
           <div className="mt-5 rounded-2xl border border-white/70 bg-white/55 p-4 text-center backdrop-blur-sm">
@@ -570,7 +562,7 @@ export default function AnalysisReport({
               programme.
             </p>
             <p className="mt-2 text-xs leading-relaxed text-plum-soft">
-              How much of it you need, and over what period, is Dr Sha&rsquo;s to
+              How much of it you need, and over what period, is for our team to
               advise at your consultation.
             </p>
           </div>
@@ -660,11 +652,7 @@ export default function AnalysisReport({
                             : "bg-[#F6EFD2] text-[#8a6d1f]"
                         }`}
                       >
-                        {expected.kind === "consult"
-                          ? expected.label
-                          : expected.kind === "softened"
-                            ? `Lines ${expected.label}`
-                            : `Expected ${expected.label}`}
+                        {expected.label}
                       </span>
                     )}
                   </div>
@@ -772,7 +760,7 @@ export default function AnalysisReport({
           <p className="mx-auto mt-4 max-w-md text-sm leading-relaxed text-plum-soft">
             You have seen where your skin can get to and which part of the
             Veluria range it matched. What it actually takes to get you there is
-            Dr Sha&rsquo;s to work out with you — and that costs nothing to find
+            for our team to work out with you — and that costs nothing to find
             out.
           </p>
           <div className="mt-7 flex flex-wrap items-center justify-center gap-3">

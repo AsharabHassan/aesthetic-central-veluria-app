@@ -9,7 +9,6 @@ const ALLOWED = new Set([
   "ConcernZoomsViewed",
   "ConcernZoomsReady",
   "SliderDragged",
-  "ProgressionStepped",
   "BookingClicked",
   "ReportCompleted",
 ]);
