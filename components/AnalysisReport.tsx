@@ -6,14 +6,15 @@ import type { SkinAnalysis } from "@/lib/types";
 import AnnotatedFace from "./AnnotatedFace";
 import BeforeAfterSlider from "./BeforeAfterSlider";
 import AfterCallouts from "./AfterCallouts";
-import CourseProgression from "./CourseProgression";
-import HeroZoom from "./HeroZoom";
+import ConcernZooms from "./ConcernZooms";
+import ScoreDestination from "./ScoreDestination";
+import VeluriaStack from "./VeluriaStack";
 import ReviewsSlider, { REVIEW_COUNT } from "./ReviewsSlider";
 import CaseStudy from "./CaseStudy";
 import VeluriaRejuvenation from "./VeluriaRejuvenation";
 import { bookingUrl, planSummary, type CtaPlacement } from "@/lib/booking";
 import { expectedImprovement } from "@/lib/expectations";
-import type { HeroZone } from "@/lib/hero";
+import { concernZones, type HeroZone } from "@/lib/hero";
 import { track, trackServer } from "@/lib/meta";
 import { planFor } from "@/lib/veluria";
 import { DISCLAIMER_FULL } from "@/lib/legal";
@@ -35,16 +36,28 @@ const CALENDAR_URL =
   process.env.NEXT_PUBLIC_CALENDAR_URL ??
   "https://api.leadconnectorhq.com/widget/bookings/free-veluria-online-consultation";
 
+/**
+ * The ask.
+ *
+ * The label is a PROP with no safe default sentence, because the copy is the
+ * point. Every CTA on this page used to read "Free Online Phone Consultation",
+ * which describes the format of the call and gives no reason to take it. The
+ * client has just been shown where their skin can get to; the button should
+ * name that, and each placement names the thing the client is looking at when
+ * they reach it.
+ */
 function PhoneConsultButton({
   variant = "primary",
   className = "",
   href = CALENDAR_URL,
+  label = "Book your free consultation",
   onClick,
 }: {
   variant?: "primary" | "ghost";
   className?: string;
   /** Built by lib/booking.ts so the matched plan travels with the click. */
   href?: string;
+  label?: string;
   onClick?: () => void;
 }) {
   return (
@@ -147,14 +160,37 @@ function SectionHead({
   );
 }
 
-function StickyPreviewBar({
+/**
+ * The persistent bar at the foot of the viewport, and the single biggest change
+ * to how hard this page asks.
+ *
+ * IT USED TO STOP BEING USEFUL. It had exactly one job: announce that the
+ * before/after had finished rendering and offer to scroll back up to it. Once
+ * the client had seen the preview it kept saying the same thing, so for the
+ * entire rest of the report — the crops, the analysis, the case study, the
+ * reviews, all the evidence — the only way to book was to happen to scroll past
+ * one of four static buttons.
+ *
+ * Now it converts. Before the preview is seen it does what it always did; after
+ * that it becomes a booking CTA and stays on screen the whole way down. Same
+ * bar, same footprint, and the ask is continuously available rather than
+ * available four times.
+ */
+function StickyCta({
   afterPending,
   after,
   previewRef,
+  seenPreview,
+  href,
+  onBook,
 }: {
   afterPending: boolean;
   after: string | null;
   previewRef: React.RefObject<HTMLElement | null>;
+  /** True once the preview section has been on screen at least once. */
+  seenPreview: boolean;
+  href: string;
+  onBook: () => void;
 }) {
   const [scrolledPast, setScrolledPast] = useState(false);
 
@@ -177,13 +213,13 @@ function StickyPreviewBar({
 
   return (
     <div className="no-print fixed bottom-4 inset-x-0 z-40 flex justify-center px-4 pointer-events-none">
-      <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-white/70 bg-white/80 px-5 py-3 backdrop-blur-xl shadow-[0_8px_32px_-10px_rgba(34,30,82,0.35)]">
+      <div className="pointer-events-auto flex max-w-[calc(100vw-2rem)] items-center gap-2.5 rounded-full border border-white/70 bg-white/85 px-4 py-2.5 backdrop-blur-xl shadow-[0_8px_32px_-10px_rgba(34,30,82,0.35)] sm:gap-3 sm:px-5 sm:py-3">
         {afterPending ? (
           <>
             <span className="h-4 w-4 shrink-0 animate-[spin_1.5s_linear_infinite] rounded-full border-2 border-plum/20 border-t-plum" />
             <span className="text-sm text-plum">Generating your before &amp; after…</span>
           </>
-        ) : after ? (
+        ) : after && !seenPreview ? (
           <>
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="shrink-0 text-plum">
               <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
@@ -192,12 +228,32 @@ function StickyPreviewBar({
             <span className="text-sm font-medium text-plum">Your before &amp; after is ready</span>
             <button
               onClick={scrollToPreview}
-              className="ml-1 rounded-full bg-plum px-4 py-1.5 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-white shadow-sm transition hover:bg-plum-soft"
+              className="ml-1 shrink-0 rounded-full bg-plum px-4 py-1.5 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-white shadow-sm transition hover:bg-plum-soft"
             >
               View ↑
             </button>
           </>
-        ) : null}
+        ) : (
+          <>
+            {/*
+              The line shortens rather than wraps below 400px: a two-line sticky
+              bar eats a real share of a small viewport, which is the opposite
+              of what a persistent CTA is for.
+            */}
+            <span className="hidden text-sm font-medium text-plum sm:inline">
+              Talk it through with our team
+            </span>
+            <a
+              href={href}
+              onClick={onBook}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0 whitespace-nowrap rounded-full bg-plum px-4 py-2 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-white shadow-sm transition hover:bg-plum-soft sm:px-5"
+            >
+              Book free consultation
+            </a>
+          </>
+        )}
       </div>
     </div>
   );
@@ -234,18 +290,34 @@ export default function AnalysisReport({
   const [mounted, setMounted] = useState(false);
   const previewRef = useRef<HTMLElement>(null);
 
-  // The same matcher the after-image prompt uses, run over the same concerns —
-  // so the products named under the preview are exactly the ones allowed to
-  // change the image above it.
-  const previewPlan = planFor(
-    (analysis.annotations ?? []).map((a) => ({
-      area: a.area,
-      concern: a.concern,
-    })),
-  );
+  // The same derivation the after-image prompt uses, run over the same
+  // annotations AND the same category scores — so the products named under the
+  // preview are exactly the ones allowed to change the image above it.
+  const concernList = (analysis.annotations ?? []).map((a) => ({
+    area: a.area,
+    concern: a.concern,
+  }));
+  // planFor, NOT programmeFor, and the page and the picture must agree on this.
+  // `programmeFor` widens the product list using the category scores, but the
+  // image is still generated from `planFor` — so naming the wider list here
+  // would caption the preview with a product whose effect was never applied to
+  // it. Whichever derivation the image uses, this has to be the same one.
+  const programme = planFor(concernList);
 
-  const heroZoomRef = useRef<HTMLDivElement>(null);
+  // Every in-scope area, worst first. Out-of-scope concerns are filtered out by
+  // lib/hero.ts, so nothing here can imply we treat something we do not.
+  const zones = concernZones(analysis.annotations, analysis.categories);
+
+  const zoomsRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // Sits directly below the before/after slider: reaching it means the client
+  // has actually scrolled past the image, not merely arrived at the section
+  // that contains it.
+  const previewSeenRef = useRef<HTMLDivElement>(null);
+  // Drives the sticky bar's switch from "your preview is ready" to the booking
+  // CTA: once they have actually seen the preview, telling them it exists is
+  // wasted space and the ask should take it.
+  const [seenPreview, setSeenPreview] = useState(false);
   // Every funnel event fires at most once per report. Without this, the
   // observers below would re-fire on each scroll past and the counts would
   // measure scrolling rather than reach.
@@ -253,7 +325,7 @@ export default function AnalysisReport({
 
   useEffect(() => setMounted(true), []);
 
-  const planText = planSummary(previewPlan);
+  const planText = planSummary(programme);
 
   /** Browser pixel + CRM timeline, once each. */
   const fire = useCallback(
@@ -268,7 +340,7 @@ export default function AnalysisReport({
 
   const ctaHref = (placement: CtaPlacement) =>
     bookingUrl(CALENDAR_URL, {
-      plan: previewPlan,
+      plan: programme,
       hero,
       name,
       email,
@@ -290,11 +362,23 @@ export default function AnalysisReport({
     });
   };
 
-  // Reach events: did they get to the preview, the zoom, the end of the report.
+  /*
+    Reach events: did they get to the preview, the crops, the end of the report.
+
+    THRESHOLD 0, AND THAT IS A BUG FIX, not a loosening. These observers ran at
+    `threshold: 0.4`, which asks for 40% of the TARGET's own area to be visible
+    — and the preview section is several thousand pixels tall. Forty percent of
+    it cannot fit in any phone viewport, so the ratio was mathematically
+    incapable of reaching 0.4 and `PreviewViewed` never fired at all. The funnel
+    numbers this page was rebuilt to produce were counting nothing.
+
+    The targets are now zero-height sentinels sitting at the point each event
+    means, so "intersecting at all" is exactly the right question.
+  */
   useEffect(() => {
     const targets: [React.RefObject<HTMLElement | null>, string][] = [
-      [previewRef, "PreviewViewed"],
-      [heroZoomRef, "HeroZoomViewed"],
+      [previewSeenRef, "PreviewViewed"],
+      [zoomsRef, "ConcernZoomsViewed"],
       [bottomRef, "ReportCompleted"],
     ];
     const observers = targets.map(([ref, event]) => {
@@ -304,10 +388,11 @@ export default function AnalysisReport({
         ([entry]) => {
           if (entry.isIntersecting) {
             fire(event);
+            if (ref === previewSeenRef) setSeenPreview(true);
             io.disconnect();
           }
         },
-        { threshold: 0.4 },
+        { threshold: 0 },
       );
       io.observe(el);
       return io;
@@ -360,6 +445,32 @@ export default function AnalysisReport({
         </p>
       </div>
 
+      {/*
+        The headline number and the first ask, above everything else.
+
+        A meaningful share of clients never scroll as far as the preview, and
+        until now the page gave those people nothing to act on — the first CTA
+        sat below a generated image that can take a minute to arrive. This block
+        needs no image and renders the moment the analysis lands.
+      */}
+      <section className="animate-fade-scale" style={{ animationDelay: "60ms" }}>
+        <ScoreDestination
+          categories={analysis.categories}
+          cta={
+            <>
+              <PhoneConsultButton
+                href={ctaHref("score")}
+                onClick={onBookingClick("score")}
+                label="Book your free consultation"
+              />
+              <p className="text-xs text-plum-mute">
+                15 minutes with our team — no cost, no obligation.
+              </p>
+            </>
+          }
+        />
+      </section>
+
       {/* Before / After */}
       <section ref={previewRef} className="animate-fade-scale" style={{ animationDelay: "80ms" }}>
         <SectionHead index="01" eyebrow="Before & After" title="Your treatment preview" />
@@ -407,41 +518,57 @@ export default function AnalysisReport({
           before anything else competes for attention, and the CTA that follows
           is the one at peak impact.
         */}
-        {after && hero && (
-          <div ref={heroZoomRef}>
-            <HeroZoom before={before} after={after} hero={hero} />
+        {/* Reach sentinel: they have scrolled past the before/after image. */}
+        <div ref={previewSeenRef} aria-hidden="true" className="h-px w-full" />
+
+        {after && zones.length > 0 && (
+          <div ref={zoomsRef}>
+            <ConcernZooms
+              before={before}
+              after={after}
+              zones={zones}
+              onReady={() => fire("ConcernZoomsReady")}
+            />
           </div>
         )}
 
-        {after && (
-          <CourseProgression
-            before={before}
-            after={after}
-            plan={previewPlan}
-            onStep={(key) => fire("ProgressionStepped", { step: key })}
-          />
+        {/*
+          Peak proof. They have just watched every flagged area improve one at a
+          time; this is the moment the ask is worth the most, so it goes here
+          rather than waiting for the end of the section.
+        */}
+        {after && zones.length > 0 && (
+          <div className="mt-7 flex flex-col items-center gap-2">
+            <PhoneConsultButton
+              href={ctaHref("hero-zoom")}
+              onClick={onBookingClick("hero-zoom")}
+              label="Get this result — book free"
+            />
+            <p className="text-xs text-plum-mute">
+              Our team will confirm what your skin needs to get there.
+            </p>
+          </div>
         )}
 
-        {after && previewPlan.length > 0 && (
+
+        {after && programme.length > 0 && (
           <div className="mt-5 rounded-2xl border border-white/70 bg-white/55 p-4 text-center backdrop-blur-sm">
             <p className="text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-plum-soft">
               This preview shows
             </p>
             <p className="mt-2 text-sm leading-relaxed text-plum">
-              {previewPlan.map((p, i) => (
+              {programme.map((p, i) => (
                 <span key={p.id}>
-                  {i > 0 && (i === previewPlan.length - 1 ? " with " : ", ")}
+                  {i > 0 && (i === programme.length - 1 ? " with " : ", ")}
                   <strong className="font-semibold">{p.name}</strong>
-                  {" — "}
-                  {p.sessions} sessions
                 </span>
               ))}
-              .
+              {" — "}the Veluria your skin matched, at the end of a full
+              programme.
             </p>
             <p className="mt-2 text-xs leading-relaxed text-plum-soft">
-              Results build over the course and are typically reviewed at twelve
-              weeks. Bioremodelling is maintained with a top-up course, as the
-              effect softens gradually once treatment stops.
+              How much of it you need, and over what period, is for our team to
+              advise at your consultation.
             </p>
           </div>
         )}
@@ -459,6 +586,22 @@ export default function AnalysisReport({
           </p>
         </div>
       </section>
+
+      {/* Why the result above takes more than one product. */}
+      {programme.length > 0 && (
+        <section className="animate-fade-scale" style={{ animationDelay: "100ms" }}>
+          <VeluriaStack
+            programme={programme}
+            cta={
+              <PhoneConsultButton
+                href={ctaHref("stack")}
+                onClick={onBookingClick("stack")}
+                label="Book your free consultation"
+              />
+            }
+          />
+        </section>
+      )}
 
       {/* Assessment map */}
       {(analysis.annotations?.length > 0 || mapPending || mapImage) && (
@@ -514,11 +657,7 @@ export default function AnalysisReport({
                             : "bg-[#F6EFD2] text-[#8a6d1f]"
                         }`}
                       >
-                        {expected.kind === "consult"
-                          ? expected.label
-                          : expected.kind === "softened"
-                            ? `Lines ${expected.label}`
-                            : `Expected ${expected.label}`}
+                        {expected.label}
                       </span>
                     )}
                   </div>
@@ -537,6 +676,7 @@ export default function AnalysisReport({
             <PhoneConsultButton
               href={ctaHref("rejuvenation")}
               onClick={onBookingClick("rejuvenation")}
+              label="Book your free consultation"
             />
           }
         />
@@ -570,6 +710,7 @@ export default function AnalysisReport({
           <PhoneConsultButton
             href={ctaHref("case-study")}
             onClick={onBookingClick("case-study")}
+            label="Start with a free consultation"
           />
         </div>
       </section>
@@ -609,20 +750,34 @@ export default function AnalysisReport({
         </div>
       </section>
 
-      {/* CTA */}
+      {/*
+        The close. It restates the destination rather than announcing that a
+        page has ended — someone who has read this far has the evidence and
+        needs the reason, not a sign-off.
+      */}
       <section className="text-center animate-fade-scale" style={{ animationDelay: "240ms" }}>
-        <p className="eyebrow">Your next step</p>
-        <h3 className="display mt-2 mb-6 text-3xl text-plum">
-          Ready when you are
-        </h3>
-        <div className="flex flex-wrap items-center justify-center gap-3">
-          <PhoneConsultButton
-            href={ctaHref("footer")}
-            onClick={onBookingClick("footer")}
-          />
-          <a href={BOOKING_URL} target="_blank" rel="noopener noreferrer" className="btn-ghost">
-            Explore treatments
-          </a>
+        <div className="glass p-7 sm:p-9">
+          <p className="eyebrow">Your next step</p>
+          <h3 className="display mt-2 text-3xl text-plum sm:text-4xl">
+            That result starts with{" "}
+            <span className="serum-text italic">a conversation</span>
+          </h3>
+          <p className="mx-auto mt-4 max-w-md text-sm leading-relaxed text-plum-soft">
+            You have seen where your skin can get to and which part of the
+            Veluria range it matched. What it actually takes to get you there is
+            for our team to work out with you — and that costs nothing to find
+            out.
+          </p>
+          <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
+            <PhoneConsultButton
+              href={ctaHref("footer")}
+              onClick={onBookingClick("footer")}
+              label="Book your free consultation"
+            />
+            <a href={BOOKING_URL} target="_blank" rel="noopener noreferrer" className="btn-ghost">
+              Explore treatments
+            </a>
+          </div>
         </div>
         <button
           onClick={onRestart}
@@ -679,10 +834,13 @@ export default function AnalysisReport({
       )}
 
       {mounted && createPortal(
-        <StickyPreviewBar
+        <StickyCta
           afterPending={afterPending}
           after={after}
           previewRef={previewRef}
+          seenPreview={seenPreview}
+          href={ctaHref("sticky")}
+          onBook={onBookingClick("sticky")}
         />,
         document.body,
       )}

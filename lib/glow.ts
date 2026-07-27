@@ -30,16 +30,16 @@ export type GlowStrength = 0 | 1 | 2 | 3;
 const SCALE: Record<number, number> = { 1: 0.45, 2: 0.75, 3: 1.0 };
 
 export function glowStrengthFromEnv(): GlowStrength {
-  const n = Number(process.env.GLOW_STRENGTH ?? 3);
-  return ([0, 1, 2, 3] as const).includes(n as GlowStrength) ? (n as GlowStrength) : 3;
+  // Defaults to 2 ("balanced"), not 3 ("campaign"). Nobody chose 3 for this
+  // report — it was simply the top of the scale sitting in the default slot,
+  // and at 3 the grade reads as a beauty filter rather than as skin.
+  const n = Number(process.env.GLOW_STRENGTH ?? 2);
+  return ([0, 1, 2, 3] as const).includes(n as GlowStrength) ? (n as GlowStrength) : 2;
 }
 
 export function firmnessStrengthFromEnv(): GlowStrength {
-  // Defaults to 3, the strength the parameter sweep was tuned at. Drop it to 2
-  // for a more clinical, less marketed look — the shadow-band lift scales with
-  // it, so 2 is roughly half the crease fill.
-  const n = Number(process.env.FIRMNESS_STRENGTH ?? 3);
-  return ([0, 1, 2, 3] as const).includes(n as GlowStrength) ? (n as GlowStrength) : 3;
+  const n = Number(process.env.FIRMNESS_STRENGTH ?? 2);
+  return ([0, 1, 2, 3] as const).includes(n as GlowStrength) ? (n as GlowStrength) : 2;
 }
 
 /**
@@ -100,7 +100,10 @@ async function firmnessPass(input: Buffer, strength: GlowStrength): Promise<Buff
     .sharpen({
       sigma: Math.min(10, Math.max(1, min / 150)),
       m1: 0,
-      m2: 0.85 * f,
+      // 0.85 was tuned against a heavily veiled input. With the veil down to a
+      // sixth of what it was there is real texture underneath, and this much
+      // gain on top of it crunches the skin into an over-processed edge map.
+      m2: 0.45 * f,
     })
     .png()
     .toBuffer();
@@ -138,7 +141,15 @@ async function firmnessPass(input: Buffer, strength: GlowStrength): Promise<Buff
   // looks at were still as deep as their own photo. 4 gives ~+8, and 6 gives
   // ~+18 which starts to flatten the face. For reference the OLD engine scored
   // -4.6 here: it made creases DEEPER than the client's own photo.
-  const g = 4 * f;
+  //
+  // Dropped from 4 to 2.2. The note above already records that 6 "starts to
+  // flatten the face"; 4 was chosen as the point just short of that, which
+  // leaves no margin — and it was scored on the shadow band alone, a number
+  // that goes up whether the face is being lifted or merely being ironed flat.
+  // On a real under-eye at 4 the whole socket fills to one even tone and the
+  // area stops reading as a face. Firmness should make a crease shallower, not
+  // absent.
+  const g = 2.2 * f;
 
   // One-sided: floor the mask at neutral so it can only ever FILL a dip, never
   // deepen a bump. A raw DoG is symmetric and would darken exactly the cheekbone
@@ -287,15 +298,34 @@ export async function hydrationGrade(
   const bloom = await sharp(raw)
     .linear(a, b)
     .blur(Math.max(2, Math.round(min / 90)))
-    .ensureAlpha(0.3 * s)
+    // 0.30 put a visible plastic shine on the forehead and nose bridge — the
+    // giveaway of a retouched photo rather than of hydrated skin. Real dermal
+    // water shows as a soft broad sheen, not a hotspot.
+    .ensureAlpha(0.15 * s)
     .png()
     .toBuffer();
 
   // Veil. Deliberately low opacity: spots, pores and scars are far higher
   // contrast than this, so they read straight through it.
+  //
+  // 0.22 WAS NOT LOW. It is a blurred copy of the whole frame laid over the
+  // whole frame at more than a fifth opacity, and it is the single biggest
+  // reason clients said the result looked like a filter. It survives high-
+  // contrast features exactly as the note above claims — a spot does read
+  // through it — but that was the wrong test. What it destroys is LOW-contrast
+  // detail, and low-contrast detail is precisely what skin is made of: pore
+  // structure, the fine hair at a beard edge, the texture under an eye. Strip
+  // that and you get a flat plastic surface that no longer reads as a face,
+  // which is what the owner was shown.
+  //
+  // Worse, `firmnessPass` then runs an unsharp over the result. Blur-then-
+  // sharpen does not restore what the blur removed; it re-emphasises the
+  // remaining edges against a smoothed background, which is the exact recipe
+  // for the waxy look. The veil is now light enough that the sharpen has real
+  // texture to work with instead of a smoothed plane.
   const veil = await sharp(raw)
     .blur(Math.max(1.5, min / 700))
-    .ensureAlpha(0.22 * s)
+    .ensureAlpha(0.06 * s)
     .png()
     .toBuffer();
 
@@ -306,8 +336,13 @@ export async function hydrationGrade(
     ])
     // Lifts the sallow cast. Only a few percent — this is vitality, not a
     // whitening or skin-lightening filter; the person's tone is unchanged.
-    .modulate({ brightness: 1 + 0.035 * s, saturation: 1 + 0.07 * s })
-    .linear(1 + 0.05 * s, -6 * s)
+    //
+    // Halved. Stacked on top of the bloom and the veil these were pushing the
+    // whole frame pale and low-contrast, which is what made the result read as
+    // washed out. The tone lock above already puts luminance back at parity
+    // with the client's own photo, so this only needs to be a nudge.
+    .modulate({ brightness: 1 + 0.018 * s, saturation: 1 + 0.05 * s })
+    .linear(1 + 0.025 * s, -3 * s)
     .jpeg({ quality: 95 })
     .toBuffer();
 
