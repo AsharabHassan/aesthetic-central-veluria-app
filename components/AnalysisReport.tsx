@@ -590,6 +590,22 @@ export default function AnalysisReport({
         </div>
       </section>
 
+      {/* Why the result above takes more than one product. */}
+      {programme.length > 0 && (
+        <section className="animate-fade-scale" style={{ animationDelay: "100ms" }}>
+          <VeluriaStack
+            programme={programme}
+            cta={
+              <PhoneConsultButton
+                href={ctaHref("stack")}
+                onClick={onBookingClick("stack")}
+                label="Book your free consultation"
+              />
+            }
+          />
+        </section>
+      )}
+
       {/* Assessment map */}
       {(analysis.annotations?.length > 0 || mapPending || mapImage) && (
         <section className="animate-fade-scale" style={{ animationDelay: "120ms" }}>
