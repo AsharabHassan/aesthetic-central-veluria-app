@@ -1,40 +1,43 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { loadImage, toSquare } from "@/lib/canvas";
-import type { VeluriaProduct } from "@/lib/veluria";
 
 /**
- * Today / partway through / at twelve weeks.
+ * Today, building, and the finished result.
  *
  * WHY THIS EXISTS. A single "after" frame sells a photograph. It answers "what
- * could I look like" and leaves "what would I actually be buying" untouched —
- * and what the client is buying is a COURSE: three sessions of Silk Skin or
- * Pearl Tone, five of Ultra Lift, reviewed at twelve weeks. Showing the
- * endpoint alone made the course length feel like a cost attached to a picture
- * rather than the thing producing it.
+ * could I look like" and leaves "is this something that happens to me overnight"
+ * untouched — and Veluria is enzyme-driven bioremodeling, so it emphatically is
+ * not. Collagenase clears disorganised collagen and new collagen is laid down
+ * behind it; the result arrives gradually and keeps arriving. Showing only the
+ * endpoint invited the client to read it as a filter.
  *
- * THE MIDPOINT IS DERIVED, NOT GENERATED, and that is a safety property rather
- * than a shortcut. lib/glow.ts records what happened the last time a second
- * generative pass was put in this pipeline: each pass preserves features only
- * relative to its own input, so acne was visibly erased as the erosion
+ * NO PROTOCOL IS NAMED HERE, and that is a deliberate reversal. This component
+ * used to label its stages "Session 3" and "Full course of 5", computed from
+ * the matched products' vial counts. That was prescribing: how many sessions
+ * someone needs is a clinical decision that belongs to the doctor with the
+ * client in front of them, not to a report generated from a selfie. The stages
+ * now describe the SHAPE of the change — it builds, then it settles — and say
+ * nothing about how long that takes or what it costs.
+ *
+ * THE MIDDLE FRAMES ARE DERIVED, NOT GENERATED, and that is a safety property
+ * rather than a shortcut. lib/glow.ts records what happened the last time a
+ * second generative pass was put in this pipeline: each pass preserves features
+ * only relative to its own input, so acne was visibly erased as the erosion
  * compounded. A cross-fade between two images the client can already see in
  * full cannot invent or delete anything — a blemish present in both endpoints
  * is present at every point in between, by construction.
- *
- * It is labelled as an illustration for the same reason: it is an interpolation
- * toward a simulated endpoint, not a prediction of week six.
  */
 
 /**
- * How far toward the simulated endpoint the midpoint frame sits.
+ * How far toward the simulated endpoint each intermediate frame sits.
  *
- * Deliberately below 0.5. Bioremodelling is cumulative and back-loaded —
- * collagen laid down after the first sessions is still remodelling at the
- * twelve-week review — so a linear midpoint would overstate where someone
- * actually is halfway through their course.
+ * Deliberately back-loaded. Bioremodelling is cumulative and the collagen laid
+ * down early is still remodelling long after it was laid down, so evenly spaced
+ * frames would overstate how much has happened by the middle of a course.
  */
-const MIDPOINT = 0.45;
+const BLEND = [0.3, 0.62];
 
 interface Step {
   key: string;
@@ -42,35 +45,25 @@ interface Step {
   sub: string;
 }
 
+const STEPS: Step[] = [
+  { key: "today", label: "Today", sub: "Your photo" },
+  { key: "early", label: "It begins", sub: "Collagen rebuilding" },
+  { key: "building", label: "Building", sub: "Firmer, clearer" },
+  { key: "full", label: "Your full result", sub: "Where it settles" },
+];
+
 export default function CourseProgression({
   before,
   after,
-  plan,
   onStep,
 }: {
   before: string;
   after: string;
-  plan: VeluriaProduct[];
   onStep?: (key: string) => void;
 }) {
-  const [midpoint, setMidpoint] = useState<string | null>(null);
+  const [blended, setBlended] = useState<string[] | null>(null);
   const [active, setActive] = useState(0);
   const [fading, setFading] = useState(false);
-
-  // The course is as long as its longest product: someone on Ultra Lift plus
-  // Silk Skin is on a five-session plan, not a three-session one.
-  const sessions = plan.length > 0 ? Math.max(...plan.map((p) => p.sessions)) : 3;
-  const halfway = Math.max(1, Math.round(sessions / 2));
-
-  const steps: Step[] = [
-    { key: "today", label: "Today", sub: "Your photo" },
-    {
-      key: "midway",
-      label: `Session ${halfway}`,
-      sub: "Partway through",
-    },
-    { key: "week12", label: "12 weeks", sub: `Full course of ${sessions}` },
-  ];
 
   useEffect(() => {
     let cancelled = false;
@@ -78,16 +71,20 @@ export default function CourseProgression({
       try {
         const [b, a] = await Promise.all([loadImage(before), loadImage(after)]);
         if (cancelled) return;
-        const canvas = toSquare(b, 1024);
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-        ctx.globalAlpha = MIDPOINT;
-        ctx.drawImage(toSquare(a, 1024), 0, 0);
-        ctx.globalAlpha = 1;
-        setMidpoint(canvas.toDataURL("image/jpeg", 0.92));
+        const squareAfter = toSquare(a, 1024);
+        const frames = BLEND.map((alpha) => {
+          const canvas = toSquare(b, 1024);
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return before;
+          ctx.globalAlpha = alpha;
+          ctx.drawImage(squareAfter, 0, 0);
+          ctx.globalAlpha = 1;
+          return canvas.toDataURL("image/jpeg", 0.92);
+        });
+        setBlended(frames);
       } catch {
-        // Fall back to hiding the middle step rather than breaking the section.
-        if (!cancelled) setMidpoint(null);
+        // Fall back to the two real endpoints rather than breaking the section.
+        if (!cancelled) setBlended(null);
       }
     })();
     return () => {
@@ -95,13 +92,13 @@ export default function CourseProgression({
     };
   }, [before, after]);
 
-  const frames = [before, midpoint ?? before, after];
+  const frames = [before, blended?.[0] ?? before, blended?.[1] ?? after, after];
 
   const select = (i: number) => {
     if (i === active) return;
     setFading(true);
     setActive(i);
-    onStep?.(steps[i].key);
+    onStep?.(STEPS[i].key);
     window.setTimeout(() => setFading(false), 40);
   };
 
@@ -110,7 +107,7 @@ export default function CourseProgression({
       <div className="mb-3 text-center">
         <p className="eyebrow">How it builds</p>
         <h4 className="display mt-1 text-xl text-plum sm:text-2xl">
-          Your course, step by step
+          Your result, as it develops
         </h4>
       </div>
 
@@ -118,39 +115,45 @@ export default function CourseProgression({
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={frames[active]}
-          alt={steps[active].label}
+          alt={STEPS[active].label}
           className={`aspect-square w-full object-cover transition-opacity duration-500 ${
             fading ? "opacity-0" : "opacity-100"
           }`}
           draggable={false}
         />
         <span className="absolute left-3 top-3 rounded-full border border-white/50 bg-white/75 px-3 py-1 text-[0.6rem] uppercase tracking-[0.18em] text-plum backdrop-blur">
-          {steps[active].label}
+          {STEPS[active].label}
         </span>
       </div>
 
+      {/*
+        Four tabs at 360px leaves ~78px each, which is enough for the label but
+        not for the sub-line beside it — so the sub-line drops to its own row
+        rather than wrapping mid-word. The grid stays 4-up at every tier: making
+        it 2x2 on mobile would break the left-to-right reading of a progression.
+      */}
       <div
         role="tablist"
-        aria-label="Treatment course stages"
-        className="mt-4 grid grid-cols-3 gap-2"
+        aria-label="How the result develops"
+        className="mt-4 grid grid-cols-4 gap-1.5 sm:gap-2"
       >
-        {steps.map((s, i) => (
+        {STEPS.map((s, i) => (
           <button
             key={s.key}
             role="tab"
             aria-selected={i === active}
             onClick={() => select(i)}
-            className={`rounded-2xl border px-3 py-2.5 text-center transition ${
+            className={`rounded-2xl border px-1.5 py-2 text-center transition sm:px-3 sm:py-2.5 ${
               i === active
                 ? "border-plum/30 bg-plum text-white shadow-sm"
                 : "border-white/70 bg-white/55 text-plum hover:bg-white/80"
             }`}
           >
-            <span className="block text-xs font-semibold tracking-wide">
+            <span className="block text-[0.68rem] font-semibold leading-tight tracking-wide sm:text-xs">
               {s.label}
             </span>
             <span
-              className={`mt-0.5 block text-[0.65rem] ${
+              className={`mt-0.5 hidden text-[0.65rem] sm:block ${
                 i === active ? "text-white/75" : "text-plum-soft"
               }`}
             >
@@ -161,9 +164,10 @@ export default function CourseProgression({
       </div>
 
       <p className="mt-3 text-center text-xs italic leading-relaxed text-plum-mute">
-        The middle stage is an illustrative midpoint between your photo and your
-        simulated twelve-week result, not a prediction of any particular week.
-        Results build over the course and are reviewed at twelve weeks.
+        The middle stages are illustrative steps between your photo and your
+        simulated result, not a prediction of any particular moment. Veluria is
+        enzyme-based, so the change builds gradually rather than appearing at
+        once.
       </p>
     </div>
   );

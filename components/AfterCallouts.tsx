@@ -11,8 +11,15 @@ const DOT: Record<string, string> = {
 };
 
 /**
- * Shows the before/after slider with a per-area list of the realistic
- * improvement to expect for each flagged area.
+ * Shows the before/after slider with a per-area list of where each flagged area
+ * can get to.
+ *
+ * The badge is a DESTINATION ("48 → 68"), not a delta ("+10–20%"). Same number,
+ * same calibration, and the reason is the client rather than the maths: a small
+ * percentage sitting beside a photograph of your own face reads as "barely
+ * worth it", because it describes an increment. A destination describes
+ * somewhere to arrive, which is the thing anyone is actually deciding whether
+ * to book for. No session count appears — that is the doctor's to say.
  */
 export default function AfterCallouts({
   annotations,
@@ -59,11 +66,7 @@ export default function AfterCallouts({
                             : "bg-[#E1EFF0] text-[#3a7a80]"
                         }`}
                       >
-                        {expected.kind === "consult"
-                          ? expected.label
-                          : expected.kind === "softened"
-                            ? `Lines ${expected.label}`
-                            : `Expected ${expected.label}`}
+                        {expected.label}
                       </span>
                     )}
                   </div>

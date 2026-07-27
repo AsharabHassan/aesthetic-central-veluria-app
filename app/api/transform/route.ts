@@ -7,7 +7,7 @@ import {
   glowStrengthFromEnv,
   hydrationGrade,
 } from "@/lib/glow";
-import { planFor } from "@/lib/veluria";
+import { programmeFor } from "@/lib/veluria";
 import type { HeroFocus } from "@/lib/hero";
 
 export const runtime = "nodejs";
@@ -50,6 +50,29 @@ function parseHero(input: unknown): HeroFocus | null {
   };
 }
 
+/**
+ * The six skin-category scores. Untrusted like everything else in the body, so
+ * they are re-validated rather than cast: a label that is not one of the six
+ * matches nothing in lib/veluria.ts and simply fails to admit a product, and a
+ * score outside 0-100 is clamped rather than allowed to widen the programme.
+ */
+function parseCategories(input: unknown): { label: string; score: number }[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .filter(
+      (c): c is Record<string, unknown> => typeof c === "object" && c !== null,
+    )
+    .map((c) => ({
+      label: typeof c.label === "string" ? c.label.trim() : "",
+      score:
+        typeof c.score === "number" && Number.isFinite(c.score)
+          ? Math.max(0, Math.min(100, c.score))
+          : 100,
+    }))
+    .filter((c) => c.label.length > 0)
+    .slice(0, 6);
+}
+
 const EXT: Record<string, string> = {
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -82,6 +105,7 @@ export async function POST(req: Request) {
     quality?: unknown;
     annotate?: unknown;
     hero?: unknown;
+    categories?: unknown;
   };
   try {
     body = await req.json();
@@ -98,6 +122,7 @@ export async function POST(req: Request) {
   }
   const concerns = parseConcerns(body.areas);
   const hero = parseHero(body.hero);
+  const categories = parseCategories(body.categories);
   // Quality drives the speed/fidelity trade. The client fires a fast "low"
   // preview and a "medium" refinement (a two-pass, streaming-like reveal).
   // "high" runs a ~3-minute review loop, so it is intentionally not allowed.
@@ -121,6 +146,7 @@ export async function POST(req: Request) {
       references.length > 0,
       annotate,
       hero,
+      categories,
     );
 
     const result = await client.images.edit({
@@ -147,11 +173,13 @@ export async function POST(req: Request) {
       );
     }
 
-    // Only a client whose plan actually contains Ultra Lift gets the lift pass.
-    // Same rule the prompt follows: the products this person was recommended are
-    // the only ones allowed to change their image, so someone with no laxity
-    // concern is never shown a firmness result they were not sold.
-    const needsLift = planFor(concerns).some((p) => p.id === "ultra-lift");
+    // Only a client whose PROGRAMME actually contains Ultra Lift gets the lift
+    // pass. Same rule the prompt follows: the products this person's skin
+    // matched are the only ones allowed to change their image, so someone with
+    // no firmness concern is never shown a lift they were not offered.
+    const needsLift = programmeFor(categories, concerns).some(
+      (p) => p.id === "ultra-lift",
+    );
 
     // The model alone is unreliably subtle on skin that is already in good
     // condition. The grade guarantees the dewy, hydrated result is visible, and
