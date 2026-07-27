@@ -1,3 +1,4 @@
+import { productFor } from "./veluria";
 import type { AnalysisCategory } from "./types";
 
 /**
@@ -23,8 +24,7 @@ type Calibration = {
 };
 
 // Ceilings are deliberately conservative: no claim may ever reach 40%, so the
-// furthest any category can be projected is its current score plus 30 points,
-// and only Hydration and Radiance can reach even that.
+// biggest badge the UI can produce is "+25–30%".
 //
 // "Tone & redness" now HAS a calibration. It used to be deliberately absent —
 // the category returned a "beyond a skin booster" flag instead — on the belief
@@ -53,18 +53,21 @@ const CALIBRATIONS: Record<string, Calibration> = {
   "Firmness & elasticity": { kind: "gain", factor: 0.3, floor: 10, ceiling: 20 },
 };
 
+/**
+ * Course length per category, because it is not a blanket 3. Ultra Lift — the
+ * product that answers firmness — is a five-vial, five-session course, so a
+ * "+X% after 3 sessions" badge on the firmness bar would under-state the
+ * protocol and mis-price the plan the client is about to be quoted.
+ */
+const CATEGORY_SESSIONS: Record<string, number> = {
+  "Firmness & elasticity": 5,
+};
+
 const clamp = (n: number, lo: number, hi: number) =>
   Math.max(lo, Math.min(hi, n));
 
 /** Round to the nearest 5 for clean, non-spuriously-precise ranges. */
 const snap5 = (n: number) => Math.round(n / 5) * 5;
-
-/**
- * Nothing ever projects to a perfect hundred. Skin that scores 97 is skin at
- * the top of what this scale describes, and a report that promised 100 would be
- * promising perfection to someone who can see their own face.
- */
-const SCORE_CEILING = 97;
 
 export interface ExpectedImprovement {
   kind: "gain" | "softened" | "consult";
@@ -72,11 +75,7 @@ export interface ExpectedImprovement {
   low: number;
   /** High end of the expected range (percent). */
   high: number;
-  /** The category's score today. */
-  from: number;
-  /** Where the full Veluria programme can take it. */
-  to: number;
-  /** Short label for UI, e.g. "48 → 68". */
+  /** Short label for UI, e.g. "+30–40% after 3 sessions" or "softened ~20%". */
   label: string;
 }
 
@@ -89,29 +88,13 @@ const CONSULT: ExpectedImprovement = {
   kind: "consult",
   low: 0,
   high: 0,
-  from: 0,
-  to: 0,
   label: "Beyond Veluria — consult the clinician",
 };
 
 /**
  * Turn a Claude skin-category score into an honest, deterministic expectation
- * of what the full Veluria programme can reach. Returns null for categories a
- * booster does not meaningfully address (so the UI can stay silent rather than
- * over-promise).
- *
- * THE LABEL IS A DESTINATION, NOT A DELTA, and that is the whole point of the
- * change. The maths and the ceilings below are exactly what they were; only the
- * framing moved. "+10–20%" beside a photograph of your own face reads as
- * "barely worth it" — it is a small number about an increment. "48 → 68" is the
- * same claim stated as somewhere to arrive, which is what anyone is actually
- * deciding whether to book for.
- *
- * NO SESSION COUNT APPEARS HERE ANY MORE. It used to close every label
- * ("+10–20% after 5 sessions"), and it should not have: how many sessions
- * someone needs is a prescribing decision that belongs to the doctor at the
- * consultation. The report's job is to show where the skin can get to and then
- * hand the client to someone qualified to say how.
+ * of improvement after 3 sessions. Returns null for categories a booster does
+ * not meaningfully address (so the UI can stay silent rather than over-promise).
  */
 export function expectedImprovement(
   category: AnalysisCategory,
@@ -127,40 +110,13 @@ export function expectedImprovement(
   let high = snap5(clamp(mid + 5, cal.floor, cal.ceiling));
   if (low === high) low = Math.max(0, low - 5); // keep it a visible range
 
-  // The destination is the top of this category's own calibrated range — the
-  // full programme is what the report now depicts, so the high end is the
-  // honest end to show. It is still bounded by the same ceiling as before: no
-  // claim was widened to produce a bigger number here.
-  const from = Math.round(score);
-  const to = Math.round(clamp(from + high, from, SCORE_CEILING));
+  const sessions = CATEGORY_SESSIONS[category.label] ?? 3;
+  const label =
+    cal.kind === "softened"
+      ? `softened ~${snap5(mid)}%`
+      : `+${low}–${high}% after ${sessions} sessions`;
 
-  return { kind: cal.kind, low, high, from, to, label: `${from} → ${to}` };
-}
-
-/**
- * The one number at the top of the report: overall skin today, and where the
- * full programme can take it.
- *
- * Averaged across every category that has a calibration, so it is the same
- * arithmetic the six individual bars show, summed — not a separate claim laid
- * on top of them. Categories the range does not address are excluded rather
- * than counted as zero improvement, which would drag the headline below what
- * the bars beneath it say and make the page argue with itself.
- */
-export function overallProjection(
-  categories: AnalysisCategory[],
-): { from: number; to: number } | null {
-  const projected = (categories ?? [])
-    .map((c) => expectedImprovement(c))
-    .filter((e): e is ExpectedImprovement => e !== null && e.kind !== "consult");
-
-  if (projected.length === 0) return null;
-
-  const mean = (ns: number[]) => ns.reduce((a, b) => a + b, 0) / ns.length;
-  return {
-    from: Math.round(mean(projected.map((p) => p.from))),
-    to: Math.round(mean(projected.map((p) => p.to))),
-  };
+  return { kind: cal.kind, low, high, label };
 }
 
 /**
@@ -237,8 +193,17 @@ export function expectedForArea(
   const category = categories.find((c) => c.label === label);
   if (!category) return null;
 
-  // The label is the destination the category resolves to, with no session
-  // count attached — `productFor` still gates scope above, but how long a
-  // course runs is the doctor's to say, not this file's.
-  return expectedImprovement(category);
+  const expected = expectedImprovement(category);
+  if (!expected || expected.kind !== "gain") return expected;
+
+  // The course length is the PRODUCT's, not a blanket 3. Ultra Lift — the one
+  // that answers laxity and jawline concerns — is a five-vial, five-session
+  // course, so a "+X% after 3 sessions" badge on a laxity callout would
+  // under-state the protocol and mis-price the plan.
+  const product = productFor(area, opts?.concern ?? "");
+  if (!product) return expected;
+  return {
+    ...expected,
+    label: `+${expected.low}–${expected.high}% after ${product.sessions} sessions`,
+  };
 }

@@ -46,41 +46,25 @@ export interface HeroZone extends HeroFocus {
   x: number;
   y: number;
   product: VeluriaProduct;
-  /** e.g. "48 → 68" — the same destination badge the report shows. */
+  /** e.g. "+10–20% after 5 sessions" — the same badge the report shows. */
   expectedLabel: string;
-  /** Claude's own treatment sentence for this area, already claim-checked. */
-  treatment: string;
-  /** So a crop's marker matches its row in the callout list above it. */
-  severity: string;
 }
 
 /**
- * EVERY in-scope annotation, worst first: highest severity, then the largest
+ * Picks the worst IN-SCOPE annotation: highest severity first, then the largest
  * expected improvement.
- *
- * WHY IT RETURNS ALL OF THEM NOW. This file used to expose only the single
- * worst area, because the whole-face slider was proving nothing and one tight
- * crop at 2x was the fix. That was right, and it did not go far enough: one
- * crop is one piece of evidence, and every other concern the client was told
- * about stayed a line of text with a percentage beside it. A client with six
- * flagged areas saw their skin improve once and read about it five times.
- *
- * Six crops is six separate moments of "oh — that actually changed", each one
- * a comparison the eye can make in a single fixation. Accumulated proof is what
- * the page was missing.
  *
  * Scope is decided by the two existing gatekeepers rather than a third opinion:
  * `expectedForArea` returns the "consult" sentinel for anything outside the
  * range (checking the area, the concern text AND Claude's own treatment
  * sentence), and `productFor` returns null for the same. Agreeing with both is
- * deliberate — it means a zone can never drift away from what the report tells
- * the client on the same page, and an out-of-scope concern can never acquire a
- * crop that implies we treated it.
+ * deliberate — it means the hero can never drift away from what the report
+ * tells the client on the same page.
  */
-export function concernZones(
+export function heroZone(
   annotations: FaceAnnotation[] | undefined,
   categories: AnalysisCategory[],
-): HeroZone[] {
+): HeroZone | null {
   const candidates = (annotations ?? [])
     .map((a) => {
       const expected = expectedForArea(a.area, categories, {
@@ -94,6 +78,8 @@ export function concernZones(
     })
     .filter((c): c is NonNullable<typeof c> => c !== null);
 
+  if (candidates.length === 0) return null;
+
   candidates.sort((p, q) => {
     const bySeverity =
       (SEVERITY_RANK[q.a.severity] ?? 0) - (SEVERITY_RANK[p.a.severity] ?? 0);
@@ -101,7 +87,8 @@ export function concernZones(
     return q.expected.high - p.expected.high;
   });
 
-  return candidates.map(({ a, expected, product }) => ({
+  const { a, expected, product } = candidates[0];
+  return {
     area: a.area,
     concern: a.concern,
     // Clamped so a stray estimate can never crop outside the photo.
@@ -109,24 +96,7 @@ export function concernZones(
     y: Math.max(0, Math.min(100, a.y)),
     product,
     expectedLabel: expected.label,
-    treatment: a.treatment,
-    severity: a.severity,
-  }));
-}
-
-/**
- * The one area the image prompt leads on: the worst in-scope concern.
- *
- * Still a single zone, because the reason for it is unchanged — the prompt
- * concentrates the largest change in the frame on one place so that change
- * survives being cropped. The crop reel shows every zone; the IMAGE still has
- * a headline.
- */
-export function heroZone(
-  annotations: FaceAnnotation[] | undefined,
-  categories: AnalysisCategory[],
-): HeroZone | null {
-  return concernZones(annotations, categories)[0] ?? null;
+  };
 }
 
 /**

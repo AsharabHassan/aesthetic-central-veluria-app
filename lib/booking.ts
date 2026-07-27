@@ -16,13 +16,10 @@ import type { VeluriaProduct } from "./veluria";
 
 /** Where on the page the click came from, so we can see which CTA converts. */
 export type CtaPlacement =
-  | "score"
   | "hero-zoom"
   | "preview"
-  | "stack"
   | "rejuvenation"
   | "case-study"
-  | "sticky"
   | "footer";
 
 export interface BookingContext {
@@ -34,18 +31,9 @@ export interface BookingContext {
   placement: CtaPlacement;
 }
 
-/**
- * "Veluria Ultra Lift, Veluria Silk Skin"
- *
- * Product names only. This string is written into a query parameter on the
- * calendar link, where GHL can surface it in a prefilled form field the client
- * reads — so it must not carry a session count. It used to ("Ultra Lift x5"),
- * which quoted the client a course length before the doctor had seen them.
- * The clinic knows its own protocol; what it needs from us is which products
- * the skin matched.
- */
+/** "Veluria Ultra Lift x5, Veluria Silk Skin x3" */
 export function planSummary(plan: VeluriaProduct[]): string {
-  return plan.map((p) => p.name).join(", ");
+  return plan.map((p) => `${p.name} x${p.sessions}`).join(", ");
 }
 
 export function bookingUrl(base: string, ctx: BookingContext): string {

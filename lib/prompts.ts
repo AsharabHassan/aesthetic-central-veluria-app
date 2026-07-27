@@ -1,4 +1,4 @@
-import { programmeFor } from "@/lib/veluria";
+import { planFor } from "@/lib/veluria";
 import type { HeroFocus } from "@/lib/hero";
 
 export const ANALYSIS_SYSTEM_PROMPT = `You are a senior aesthetic skin consultant at Aesthetics Central Clinic, a science-led UK aesthetics clinic specialising in natural results and medically precise treatments. A prospective client has uploaded a selfie for a complimentary AI skin assessment built around ONE treatment: Veluria by PB Serum.
@@ -219,7 +219,6 @@ export function buildAfterImagePrompt(
   hasReferences: boolean,
   annotate = false,
   hero: HeroFocus | null = null,
-  categories: { label: string; score: number }[] = [],
 ): string {
   const list: ConcernArea[] =
     concerns.length > 0
@@ -259,19 +258,12 @@ Make this the LARGEST change in the picture. It has to survive being cropped: if
     ? `\n\nREFERENCE IMAGES: any image AFTER the first shows REAL skin following aesthetic treatment — match that realistic treated-skin texture, tone and glow. Do NOT copy the reference people's identity or features in any way.`
     : "";
 
-  // The programme drives the image: only the products this client's skin
-  // actually matched get to change it. Someone with no pigment concern must not
-  // get Pearl Tone's tone-evening applied to them.
-  //
-  // It is `programmeFor` rather than `planFor` because the image now depicts
-  // the COMPLETED programme, and the programme is derived from the category
-  // scores as well as the annotations. A client whose annotations all described
-  // texture used to get a picture showing one product's work even when their
-  // tone score was 52 and Pearl Tone plainly had something to do. Nothing about
-  // what any product claims changed — only which of them are in the frame.
-  const programme = programmeFor(categories, list);
-  const planBlock = programme
-    .map((p) => `- ${p.name} (${p.actives}) — over a full course of ${p.sessions} sessions: ${p.visibleResult}.`)
+  // The plan drives the image: only the products this client actually needs get
+  // to change their skin. Someone with no pigment concern must not get Pearl
+  // Tone's tone-evening applied to them.
+  const plan = planFor(list);
+  const planBlock = plan
+    .map((p) => `- ${p.name} (${p.actives}) — over ${p.sessions} sessions: ${p.visibleResult}.`)
     .join("\n");
 
   // The lift bullet is emitted ONLY when this client's plan actually contains
@@ -279,18 +271,16 @@ Make this the LARGEST change in the picture. It has to survive being cropped: if
   // concern must not be shown a firmness result from a product nobody
   // recommended them. It leads the list because "firmer" is the change the
   // model is most inclined to skip, and the first bullet carries the most weight.
-  const liftBlock = programme.some((p) => p.id === "ultra-lift")
+  const liftBlock = plan.some((p) => p.id === "ultra-lift")
     ? `- LIFTED AND FIRM — THIS IS THE HEADLINE CHANGE, AND IT MUST BE OBVIOUS AT A GLANCE. The skin is denser, tighter and springier, and it SITS HIGHER on the face instead of hanging. Slack skin across the cheeks is taut. The soft heaviness along the lower face is gone and the jaw margin reads as one clean, continuous, well-defined line. Expression lines on the forehead, between the brows and at the eyes are markedly SHALLOWER and softer — softened, never erased, never smoothed into a blank waxy plane, and the person keeps their expression. The face must look genuinely FIRMER, not merely more moisturised. This is the SKIN tightening and nothing else: the face is never reshaped, slimmed or narrowed, the bone structure never changes, and no filler-style volume is added anywhere.\n`
     : "";
 
-  return `Photorealistic clinical follow-up photograph of the SAME person in the first image, at the END POINT of their COMPLETE Veluria programme at Aesthetics Central Clinic — every course finished, every product below delivered by microneedling, and the collagen laid down by the recombinant collagenase fully remodelled. This is the best this person's skin gets: not a first session, not a halfway point, but the finished result.
+  return `Photorealistic clinical follow-up photograph of the SAME person in the first image, taken twelve weeks after their course of Veluria treatments (PB Serum's microneedled bioremodeling range, built on recombinant collagenase) at Aesthetics Central Clinic.
 
-${heroBlock}THE COMPLETE PROGRAMME THIS PERSON HAD, AND WHAT EACH PRODUCT DID TO THEIR SKIN:
+${heroBlock}THE PLAN THIS PERSON HAD, AND WHAT EACH PRODUCT DID TO THEIR SKIN:
 ${planBlock}
 
-THESE PRODUCTS WERE USED TOGETHER, AND THE RESULT COMPOUNDS. They are not alternatives: each one is built on the same recombinant collagenase and every one of them acts on luminosity, so their effects stack on the same skin rather than dividing it between them. Render the combined end state of ALL of them at once — the sum, not an average, and not the strongest one alone.
-
-RENDER THE SKIN IN ITS FULLY TREATED STATE. Do not simply reproduce the skin from the original photo. The result of that complete programme, which must be obvious at a glance:
+RENDER THE SKIN IN ITS TREATED STATE. Do not simply reproduce the skin from the original photo. The result of that plan, which must be obvious at a glance:
 ${liftBlock}- REBUILT AND PLUMPED: collagen is regenerated, so the skin is denser, firmer and springier — it sits better on the face and looks genuinely healthier rather than merely moisturised. Fine surface lines and crepey texture are filled out from beneath and are markedly shallower.
 - SATURATED AND DEWY: plump, water-filled, bouncy "glass skin", and it returns the light in soft, luminous, slightly wet-looking highlights along the cheekbones, brow bones, nose bridge, chin and cupid's bow. THIS SHEEN MUST BE CLEARLY, OBVIOUSLY PRESENT — a healthy dewy glow, never greasy, sweaty or oily, and never flat, thirsty or papery.
 - SILK TEXTURE: the surface is resurfaced smooth, even and refined. Dryness, flakiness, roughness and crepiness are gone. Pores stay visible but read tight and clean.

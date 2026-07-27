@@ -51,11 +51,6 @@ export default function Home() {
     areas: { area: string; concern: string }[] = [],
     annotate = false,
     hero: HeroZone | null = null,
-    // The six category scores. The image now depicts the client's whole Veluria
-    // programme, and lib/veluria.ts derives that programme from the scores as
-    // well as the annotations — a tone score of 52 puts Pearl Tone in the
-    // picture even when no annotation happened to use the word "pigment".
-    categories: { label: string; score: number }[] = [],
   ) =>
     fetch("/api/transform", {
       method: "POST",
@@ -66,7 +61,6 @@ export default function Home() {
         areas,
         annotate,
         hero: hero ? { area: hero.area, concern: hero.concern } : null,
-        categories,
       }),
     })
       .then(async (r) => {
@@ -194,14 +188,14 @@ export default function Home() {
     // second, hence the flag.
     let refined = false;
 
-    fetchAfter(image, "low", concerns, false, heroArea, analysisResult.categories ?? []).then((preview) => {
+    fetchAfter(image, "low", concerns, false, heroArea).then((preview) => {
       if (preview && !refined) {
         setAfterImage(preview);
         setAfterPending(false);
       }
     });
 
-    const afterPromise = fetchAfter(image, "medium", concerns, false, heroArea, analysisResult.categories ?? []).then(
+    const afterPromise = fetchAfter(image, "medium", concerns, false, heroArea).then(
       (afterImg) => {
         if (afterImg) {
           refined = true;

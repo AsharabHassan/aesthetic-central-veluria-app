@@ -6,9 +6,9 @@ export const runtime = "nodejs";
 /** Only events this app fires. An open string field would let anything through. */
 const ALLOWED = new Set([
   "PreviewViewed",
-  "ConcernZoomsViewed",
-  "ConcernZoomsReady",
+  "HeroZoomViewed",
   "SliderDragged",
+  "ProgressionStepped",
   "BookingClicked",
   "ReportCompleted",
 ]);
