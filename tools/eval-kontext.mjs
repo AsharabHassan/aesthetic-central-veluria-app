@@ -25,6 +25,8 @@ const env = Object.fromEntries(
 );
 const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 const N = Number(process.argv[2] ?? 2);
+// BFL now recommends FLUX.2 over Kontext for editing workflows.
+const MODEL = process.argv[3] ?? "flux-kontext-pro";
 
 const FACES = [
   { id: "older", file: "./public/assets/case-studies/facial-rejuvenation-before.webp",
@@ -43,13 +45,17 @@ const FACES = [
 const PROMPT = (c) =>
   `Reduce ${c.split(";").map((s) => s.trim()).join(", reduce ")}, as if twelve weeks into a course of ` +
   `professional skin treatment. Keep everything else in the photograph exactly as it is: the same person, ` +
-  `same face shape, same eyes, same eyebrows, same hairline and hair, same expression, same pose, same ` +
-  `crop and framing, same lighting, same background, same age. Keep every mole and freckle. Keep real ` +
-  `photographic skin texture with visible pores and skin grain — do not smooth, airbrush or blur the ` +
-  `face, and do not change any area that was not listed.`;
+  `same face shape, same eyes with the same eyelid position, same eyebrows, same hairline and hair, same ` +
+  `expression, same pose, same crop and framing, same lighting, same background, same age. Keep every ` +
+  `mole and freckle. Keep real photographic skin texture with visible pores and skin grain — do not ` +
+  `smooth, airbrush or blur the face, and do not change any area that was not listed.`;
+// A harder, prohibition-led version of the above was tried and measured WORSE
+// on Kontext — identity 4.0 -> 2.7, credible 2.7 -> 2.3 — while still opening
+// the subject's eyes. Same pattern as gpt-image-2: piling on what not to do
+// costs the result without buying the restraint. Kept light on purpose.
 
 async function kontext(imgBuf, prompt) {
-  const submit = await fetch("https://api.bfl.ai/v1/flux-kontext-pro", {
+  const submit = await fetch("https://api.bfl.ai/v1/" + MODEL, {
     method: "POST",
     headers: { accept: "application/json", "x-key": env.BFL_API_KEY, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -136,7 +142,7 @@ for (const f of FACES) {
   }
   if (cands.length) {
     cands.sort((a, b) => rank(b.s) - rank(a.s));
-    await writeFile(`${OUT}/${f.id}-KONTEXT.jpg`, await sharp(cands[0].out).jpeg({ quality: 92 }).toBuffer());
+    await writeFile(`${OUT}/${f.id}-${MODEL}.jpg`, await sharp(cands[0].out).jpeg({ quality: 92 }).toBuffer());
     bests.push(cands[0].s);
   }
 }
