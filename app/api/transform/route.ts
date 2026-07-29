@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import OpenAI, { toFile } from "openai";
+
 import sharp from "sharp";
 import Anthropic from "@anthropic-ai/sdk";
 import { buildAfterImagePrompt } from "@/lib/prompts";
@@ -47,6 +47,14 @@ export const maxDuration = 300;
 const SIZE = 1024;
 const QUALITY = (process.env.AFTER_QUALITY as "low" | "medium" | "high") ?? "high";
 const VERIFY_MODEL = "claude-sonnet-5";
+/**
+ * How many progressive renders to stream before the final image.
+ *
+ * Each costs 100 image output tokens — pennies against a $0.21 generation, and
+ * the difference between a blank spinner and watching the result appear. Must
+ * be at least 1; see the streaming note in POST.
+ */
+const PARTIALS = Number(process.env.AFTER_PARTIAL_IMAGES ?? 3);
 
 interface Verdict {
   samePerson: boolean;
@@ -181,63 +189,180 @@ export async function POST(req: Request) {
           `${verdict.term ? ` — "${verdict.term}"` : ""})`,
   );
 
+  let square: Buffer;
   try {
-    const square = await sharp(original)
-      .resize(SIZE, SIZE, { fit: "cover" })
-      .png()
-      .toBuffer();
-
-    const started = Date.now();
-    const client = new OpenAI({ apiKey, timeout: 280_000 });
-    const result = await client.images.edit({
-      model: "gpt-image-2",
-      image: await toFile(square, "face.png", { type: "image/png" }),
-      prompt,
-      size: "1024x1024",
-      quality: QUALITY,
-      // input_fidelity is deliberately absent: gpt-image-2 rejects it and always
-      // processes reference images at high fidelity anyway.
-    });
-
-    const b64 = result.data?.[0]?.b64_json;
-    if (!b64) {
-      return NextResponse.json({ error: "Image generation returned no result." }, { status: 502 });
-    }
-
-    // The tone lock still earns its place: measured, gpt-image-2 raised facial
-    // luminance 46% on a Black subject, and that is skin-lightening whatever
-    // the prompt said. `hydrationGrade` applies it FIRST, against raw output.
-    // Glow is left at its env default — the generation is doing the work now,
-    // so this is a finishing pass rather than the source of the change.
-    const graded = await hydrationGrade(
-      Buffer.from(b64, "base64"),
-      glowStrengthFromEnv(),
-      square,
-      0,
-    );
-
-    const check = await verifyIdentity(square, graded);
-    console.log(
-      `[transform] ${QUALITY} in ${((Date.now() - started) / 1000).toFixed(0)}s` +
-        (check ? ` — same person: ${check.samePerson}, improved: ${check.improved} (${check.note})` : " — identity check unavailable"),
-    );
-
-    // REFUSE ON IDENTITY, NOT ON MAGNITUDE. Showing someone a face that is not
-    // theirs is the one failure worse than showing them no result at all.
-    if (check && !check.samePerson) {
-      return NextResponse.json(
-        { error: "The simulation did not hold your likeness closely enough to show.", note: check.note },
-        { status: 422 },
-      );
-    }
-
-    return NextResponse.json({
-      image: `data:image/jpeg;base64,${graded.toString("base64")}`,
-      verified: check?.samePerson ?? null,
-      improved: check?.improved ?? null,
-    });
-  } catch (err) {
-    console.error("[transform] failed:", err);
-    return NextResponse.json({ error: "We couldn't generate your after image." }, { status: 502 });
+    square = await sharp(original).resize(SIZE, SIZE, { fit: "cover" }).png().toBuffer();
+  } catch {
+    return NextResponse.json({ error: "That image could not be read." }, { status: 400 });
   }
+
+  /**
+   * STREAMED, AND IT IS THE SINGLE BIGGEST THING WE CAN DO ABOUT THE WAIT.
+   *
+   * A high-quality edit takes ~200s and that is the model's floor — we are not
+   * getting it down without giving up the quality that makes the result worth
+   * showing. What we CAN change is that the client stared at a spinner for the
+   * whole of it. With partial images, first byte lands in roughly 5-15s instead
+   * of ~195s: they watch their own after photograph resolve rather than waiting
+   * to find out whether one is coming.
+   *
+   * The total is unchanged. The perceived wait is transformed.
+   *
+   * partial_images must be >= 1. At 0 the API emits no events until completion,
+   * and an idle SSE connection of that length draws 408s from proxies — the
+   * streaming path is strictly worse than the plain one at 0.
+   *
+   * Partials are shown UNGRADED and unverified, deliberately. They are a
+   * progress indicator that happens to look like the answer. The graded,
+   * identity-checked final replaces whatever the client last saw.
+   */
+  const encoder = new TextEncoder();
+  const started = Date.now();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (payload: Record<string, unknown>) => {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+      };
+
+      try {
+        // RAW HTTP, NOT THE SDK, and the reason is worth recording because the
+        // failure was silent and destructive. The installed openai SDK (4.104)
+        // has no `partial_images` on the images resource — only on `responses`.
+        // Passing `stream: true` through it did not error: it returned the
+        // ordinary parsed response object, `for await` fell back to iterating
+        // the base64 STRING one character at a time, and a couple of million
+        // promises later dev crashed with "Map maximum size exceeded".
+        //
+        // So the request is built by hand. It is thirty lines, it pins the
+        // exact contract the docs specify, and it avoids a major SDK upgrade
+        // for one endpoint. Revisit once the SDK ships image streaming.
+        const form = new FormData();
+        form.append("model", "gpt-image-2");
+        form.append("image", new Blob([new Uint8Array(square)], { type: "image/png" }), "face.png");
+        form.append("prompt", prompt);
+        form.append("size", "1024x1024");
+        form.append("quality", QUALITY);
+        form.append("stream", "true");
+        form.append("partial_images", String(PARTIALS));
+        // input_fidelity is deliberately absent: gpt-image-2 rejects it and
+        // always processes reference images at high fidelity anyway.
+
+        const res = await fetch("https://api.openai.com/v1/images/edits", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}` },
+          body: form,
+          signal: AbortSignal.timeout(290_000),
+        });
+
+        if (!res.ok || !res.body) {
+          const detail = await res.text().catch(() => "");
+          console.error(`[transform] upstream ${res.status}: ${detail.slice(0, 400)}`);
+          send({ type: "error", error: "We couldn't generate your after image." });
+          controller.close();
+          return;
+        }
+
+        let finalB64: string | null = null;
+        let partials = 0;
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          // Keep the trailing fragment: a frame carrying a megabyte of base64
+          // will straddle many chunks.
+          const frames = buf.split("\n\n");
+          buf = frames.pop() ?? "";
+          for (const frame of frames) {
+            const line = frame.split("\n").find((l) => l.startsWith("data:"));
+            if (!line) continue;
+            const payload = line.slice(5).trim();
+            if (!payload || payload === "[DONE]") continue;
+            let event: { type?: string; b64_json?: string };
+            try {
+              event = JSON.parse(payload);
+            } catch {
+              continue;
+            }
+            if (event.type === "image_edit.partial_image" && event.b64_json) {
+              partials += 1;
+              if (partials === 1) {
+                console.log(
+                  `[transform] first partial at ${((Date.now() - started) / 1000).toFixed(0)}s`,
+                );
+              }
+              send({ type: "partial", image: `data:image/png;base64,${event.b64_json}` });
+            } else if (event.type === "image_edit.completed" && event.b64_json) {
+              finalB64 = event.b64_json;
+            }
+          }
+        }
+
+        if (!finalB64) {
+          send({ type: "error", error: "Image generation returned no result." });
+          controller.close();
+          return;
+        }
+
+        // The tone lock still earns its place: measured, gpt-image-2 raised
+        // facial luminance 46% on a Black subject, and that is skin-lightening
+        // whatever the prompt said. `hydrationGrade` applies it FIRST, against
+        // raw output. Glow stays at its env default — the generation is doing
+        // the work now, so this is a finishing pass, not the source of change.
+        const graded = await hydrationGrade(
+          Buffer.from(finalB64, "base64"),
+          glowStrengthFromEnv(),
+          square,
+          0,
+        );
+
+        const check = await verifyIdentity(square, graded);
+        console.log(
+          `[transform] ${QUALITY} in ${((Date.now() - started) / 1000).toFixed(0)}s, ` +
+            `${partials} partial(s)` +
+            (check
+              ? ` — same person: ${check.samePerson}, improved: ${check.improved} (${check.note})`
+              : " — identity check unavailable"),
+        );
+
+        // REFUSE ON IDENTITY, NOT ON MAGNITUDE. Showing someone a face that is
+        // not theirs is the one failure worse than showing them no result. The
+        // client must drop any partial it is displaying when it sees this.
+        if (check && !check.samePerson) {
+          send({
+            type: "error",
+            error: "The simulation did not hold your likeness closely enough to show.",
+            note: check.note,
+          });
+        } else {
+          send({
+            type: "final",
+            image: `data:image/jpeg;base64,${graded.toString("base64")}`,
+            verified: check?.samePerson ?? null,
+            improved: check?.improved ?? null,
+          });
+        }
+      } catch (err) {
+        console.error("[transform] failed:", err);
+        send({ type: "error", error: "We couldn't generate your after image." });
+      }
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      // no-transform matters as much as no-cache: a proxy that buffers to
+      // "optimise" the response would reassemble exactly the 200s wait this
+      // exists to remove.
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }

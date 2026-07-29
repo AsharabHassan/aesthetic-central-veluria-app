@@ -68,9 +68,48 @@ export default function Home() {
   const [errorMsg, setErrorMsg] = useState<string>("");
   // Guards the one-shot report delivery so a given analysis emails the PDF once.
   const reportSent = useRef(false);
+  /**
+   * The analysis, started the moment the photo is confirmed rather than on form
+   * submit — so it runs WHILE the client is typing their name.
+   *
+   * It is ~44s of the wait and it blocks everything after it: the after image
+   * cannot start until Claude has written the brief for it. Moving it into the
+   * form-filling window removes it from the wait the client actually perceives,
+   * and costs nothing extra, because a client who confirms their photo and then
+   * abandons the form has only cost us one cheap vision call.
+   *
+   * Consent is already given at this point: the capture step's checkbox is the
+   * one that covers processing the photograph. The form's checkbox covers being
+   * contacted, which is a different permission and not one this needs.
+   *
+   * A ref, not state, because nothing renders from it and a re-render must not
+   * restart a running request.
+   */
+  const analysisPromise = useRef<Promise<SkinAnalysis> | null>(null);
+
+  const startAnalysis = (image: string): Promise<SkinAnalysis> => {
+    const p = fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image }),
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error ?? "Analysis failed.");
+      return data.analysis as SkinAnalysis;
+    });
+    // Attach a catch so an early rejection cannot surface as an unhandled
+    // rejection while the client is still filling in the form. The real
+    // handling happens where the promise is awaited.
+    p.catch(() => {});
+    analysisPromise.current = p;
+    return p;
+  };
 
   const reset = () => {
     reportSent.current = false;
+    // Drop any in-flight analysis, or a second run would await the FIRST
+    // photo's result and describe skin the client is no longer looking at.
+    analysisPromise.current = null;
     setSelfie(null);
     setLead(null);
     setLeadMeta(null);
@@ -146,14 +185,11 @@ export default function Home() {
 
     let analysisResult: SkinAnalysis;
     try {
-      const r = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image }),
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data.error ?? "Analysis failed.");
-      analysisResult = data.analysis as SkinAnalysis;
+      // Almost always already finished: it started when the photo was
+      // confirmed, and filling the form takes longer than the analysis does.
+      // Falls back to starting it here if the client somehow arrived without
+      // passing through the capture step.
+      analysisResult = await (analysisPromise.current ?? startAnalysis(image));
       setAnalysis(analysisResult);
       setStep("result");
     } catch (err) {
@@ -223,7 +259,50 @@ export default function Home() {
         hero: heroArea ? { area: heroArea.area, concern: heroArea.concern } : null,
       }),
     })
-      .then(async (r) => (r.ok ? ((await r.json()).image as string) : null))
+      // STREAMED. The route emits progressive renders as the model produces
+      // them, so the client watches their after photograph resolve from about
+      // 10s instead of waiting ~200s to learn whether one is coming. Only the
+      // final frame is graded and identity-checked; partials are progress.
+      .then(async (r) => {
+        if (!r.ok || !r.body) return null;
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let final: string | null = null;
+
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          // SSE frames are separated by a blank line. Keep the trailing
+          // fragment in the buffer — a frame can straddle two chunks.
+          const frames = buffer.split("\n\n");
+          buffer = frames.pop() ?? "";
+          for (const frame of frames) {
+            const line = frame.split("\n").find((l) => l.startsWith("data:"));
+            if (!line) continue;
+            let msg: { type?: string; image?: string };
+            try {
+              msg = JSON.parse(line.slice(5).trim());
+            } catch {
+              continue;
+            }
+            if (msg.type === "partial" && msg.image) {
+              // Show it immediately. `previewPending` stays true so the reel
+              // still reads as working — this frame is not the answer yet.
+              setPreviewImage(msg.image);
+            } else if (msg.type === "final" && msg.image) {
+              final = msg.image;
+            } else if (msg.type === "error") {
+              // Drop whatever partial is on screen: a refused result must not
+              // leave a half-rendered face standing as the outcome.
+              setPreviewImage(null);
+              return null;
+            }
+          }
+        }
+        return final;
+      })
       .catch(() => null)
       .then(async (after): Promise<{ zone: HeroZone; pair: ZonePair }[]> => {
         if (!after) {
@@ -412,6 +491,9 @@ export default function Home() {
             <SelfieCapture
               onCaptured={(url) => {
                 setSelfie(url);
+                // Kick the analysis off NOW, not on submit. It runs while they
+                // type their details, so ~44s comes off the wait they notice.
+                startAnalysis(url);
                 setStep("form");
               }}
             />
