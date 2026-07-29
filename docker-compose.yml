@@ -17,7 +17,6 @@ services:
       dockerfile: Dockerfile.web
     environment:
       NODE_ENV: production
-      IMAGING_URL: http://imaging:8000
       DATABASE_URL: postgres://aesthetics:${POSTGRES_PASSWORD}@db:5432/aesthetics
       REDIS_URL: redis://redis:6379
       S3_ENDPOINT: http://minio:9000
@@ -28,25 +27,24 @@ services:
       NEXT_PUBLIC_CALENDAR_URL: ${NEXT_PUBLIC_CALENDAR_URL}
       NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
     depends_on:
-      imaging:
-        condition: service_healthy
       db:
         condition: service_healthy
     restart: unless-stopped
 
-  imaging:
-    build: ./imaging
-    # Never exposed publicly. Only `web` talks to it, over the internal network
-    # — it takes raw client photographs and has no authentication of its own.
-    expose:
-      - "8000"
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          # MediaPipe + OpenCV on a 1024px frame sits well inside this; the cap
-          # is here so a malformed upload cannot take the host down.
-          memory: 1500M
+  # The `imaging` service that used to sit here — a FastAPI + MediaPipe worker
+  # doing landmark masking, a jaw-lift warp and a photo quality gate — has been
+  # removed. Its only live endpoint, /compose, is now lib/compose.ts inside the
+  # Next.js app.
+  #
+  # WHY: nothing started it. `npm run dev` is plain `next dev`, so in local
+  # development /api/compose got a connection refused, returned 503, and the
+  # before/after slider rendered as an empty gap. A more accurate mask that is
+  # never reached loses to a good-enough mask that always runs.
+  #
+  # Its /geometry quality gate was never wired up either, but it is a genuinely
+  # good idea and worth rebuilding if photo quality becomes the bottleneck. The
+  # whole service is recoverable: `git show a3372c1:imaging/` (or check out that
+  # commit's `imaging/` directory).
 
   db:
     image: postgres:17-alpine

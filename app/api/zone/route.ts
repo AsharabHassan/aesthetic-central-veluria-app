@@ -9,7 +9,7 @@ import {
 } from "@/lib/glow";
 import { productFor } from "@/lib/veluria";
 import { zoneCropBox, zoneWindowFor } from "@/lib/zoneCrop";
-import { parseImagePrompt } from "@/lib/promptGuard";
+import { inspectImagePrompt, type PromptVerdict } from "@/lib/promptGuard";
 
 /**
  * Generates the "after" for ONE concern zone, on its own tight crop.
@@ -123,7 +123,7 @@ function parseZone(
   concern: string;
   x: number;
   y: number;
-  imagePrompt: string | null;
+  verdict: PromptVerdict;
 } | null {
   if (typeof input !== "object" || input === null) return null;
   const o = input as Record<string, unknown>;
@@ -136,7 +136,7 @@ function parseZone(
     concern: typeof o.concern === "string" ? o.concern.trim() : "",
     x: num(o.x),
     y: num(o.y),
-    imagePrompt: parseImagePrompt(o.imagePrompt),
+    verdict: inspectImagePrompt(o.imagePrompt),
   };
 }
 
@@ -212,9 +212,16 @@ export async function POST(req: Request) {
     // and where the light catches — and an image model answers a specific
     // photographic description far better than a generic one. When the brief is
     // missing or fails the claim check, the template still runs.
-    const prompt = zone.imagePrompt ?? buildZonePrompt(zone);
+    const prompt = zone.verdict.ok ? zone.verdict.prompt : buildZonePrompt(zone);
+    // WHY, not just WHICH. The fallback used to be invisible, so a guard that
+    // was rejecting most briefs over a single word looked exactly like a guard
+    // that never fired — and every client quietly got the same generic edit.
     console.log(
-      `[zone] "${zone.area}" prompt: ${zone.imagePrompt ? "claude-authored" : "template"}`,
+      zone.verdict.ok
+        ? `[zone] "${zone.area}" prompt: claude-authored`
+        : `[zone] "${zone.area}" prompt: template ` +
+            `(brief rejected: ${zone.verdict.reason}` +
+            `${zone.verdict.term ? ` — "${zone.verdict.term}"` : ""})`,
     );
     const needsLift = productFor(zone.area, zone.concern)?.id === "ultra-lift";
     // The tone-lock reference: THIS ZONE's own before crop, not the whole face.
@@ -231,15 +238,39 @@ export async function POST(req: Request) {
         image: await toFile(input, `zone.${EXT["image/png"]}`, { type: "image/png" }),
         prompt,
         size: "1024x1024",
-        // LOW, deliberately, and it is both faster AND better here.
+        // MEDIUM, and the note this replaces argued itself out of it.
         //
-        // "medium" was chosen when the pipeline took one shot and hoped. Given
-        // the same wall-clock budget, three LOW shots fired together beat one
-        // medium shot: measured on the under-eye crop, medium scored 25.2 in
-        // 67s while best-of-three-low scored 21.7 in 27s — and low holds the
-        // original framing noticeably better, where medium drifts the crop.
-        // Less than half the latency for the same visible result.
-        quality: "low",
+        // It compared three LOW shots fired together (21.7 in 27s) against ONE
+        // medium shot (25.2 in 67s) and picked low on latency. But those are not
+        // the only two options: three MEDIUM shots fired together cost the same
+        // ~67s of wall clock as one, because they run in parallel. The old
+        // comparison held candidate count and quality coupled when only quality
+        // needed to move.
+        //
+        // IT BUYS RELIABILITY, NOT A HIGHER PEAK, and the floor below is the
+        // thing that cares. Same two crops, same prompts, best-of-3 either way:
+        //
+        //   under-eye  low    [26.6, 21.0, 19.2] / [23.3, 22.4, 18.4]
+        //              medium [24.8, 22.9, 22.5]
+        //   cheek      low    [16.4, 13.4,  9.2] / [ 9.3,  8.6,  7.2]  <- all fail
+        //              medium [13.7, 12.8,  4.7]                       <- two clear
+        //
+        // The peak barely moves; the SPREAD collapses. At low the cheek failed
+        // the floor outright on one run of the very same input, and on a real
+        // consultation two of three concerns dropped off the page — the client
+        // sees one close-up and concludes the treatment does nothing for the
+        // other two. At medium the runner-up candidate also clears 10, so losing
+        // the best roll no longer costs the client a whole concern.
+        //
+        // Latency roughly triples per zone (~30s -> ~90s), but zones are fired
+        // in parallel so the page's total wait stays inside the 1-2 minutes the
+        // rest of this pipeline is already built around.
+        //
+        // Cost is $0.053 vs $0.006 per image, so ~$0.16 per zone and ~$0.48 for
+        // a three-zone consultation. Against a booked consultation that is not a
+        // real number. Overridable, because the whole point of the note above is
+        // that this is a measurement, not a principle.
+        quality: (process.env.ZONE_QUALITY as "low" | "medium" | "high") ?? "medium",
       });
       const b64 = result.data?.[0]?.b64_json;
       if (!b64) return null;

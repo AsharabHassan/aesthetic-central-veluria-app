@@ -1,37 +1,61 @@
 import { NextResponse } from "next/server";
 import sharp from "sharp";
+import {
+  CANVAS,
+  changeScore,
+  composePatches,
+  gradeWithinFace,
+  type Patch,
+} from "@/lib/compose";
+import {
+  firmnessStrengthFromEnv,
+  glowStrengthFromEnv,
+  hydrationGrade,
+} from "@/lib/glow";
 
 /**
- * The full-face "after", assembled from the close-ups that actually worked.
+ * The full-face "after": the close-ups that worked, put back onto the photo.
  *
- * WHY ASSEMBLED RATHER THAN GENERATED. A single full-face generation does not
- * change anything: `images.edit` re-renders the frame, so at that scale any one
- * area is a few hundred pixels and comes back retextured. Measured, the jaw
- * moved ~11 across three prompt variants and looked identical every time. The
- * SAME areas generated on their own 1024px crops score 16-23 and are
- * unmistakable. So the close-ups are the result; this puts them back.
- *
- * The compositing itself is in imaging/compose.py, because it needs face
- * landmarks: every patch is masked to the skin of the face, so background, hair,
- * clothing and the silhouette are never sourced from a generated image. That is
- * what makes the seam impossible — an earlier attempt at this pasted
- * rectangular crops and left a visible box where the model's invented grey wall
- * met the client's black top.
+ * The compositing itself is lib/compose.ts — see that file for why it moved out
+ * of a Python service and what replaced the landmark mask. This route is the
+ * HTTP edge: parse, compose, guarantee a floor, measure, return.
  */
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
-const IMAGING_URL = process.env.IMAGING_URL ?? "http://127.0.0.1:8000";
+/**
+ * How much the full-face result must differ from the client's own photograph
+ * before we are willing to call it an "after".
+ *
+ * MUCH lower than /api/zone's floor of 10, and the two are not comparable
+ * quantities even though they share a unit: a close-up crop is ALL concern, so
+ * a change fills the frame, while the same change on a whole face is diluted by
+ * the hair, background and clothing that make up most of the pixels.
+ *
+ * Measured on this pipeline, one real under-eye patch on a 1024² face:
+ *   grade only, no patches      0.65   subtle but real
+ *   grade + one accepted patch  1.57   crepe and crow's feet clearly softer
+ * so 1.0 is what separates "we only relit the skin" from "a generated close-up
+ * actually landed". Anchored on the same measurement it gates, which is the
+ * mistake /api/zone's floor made on its first attempt.
+ *
+ * Below this we still return the image and flag it — a full-face result that is
+ * honestly weak is worth showing next to strong close-ups, and unlike a dud
+ * close-up it does not claim to be proof of anything on its own.
+ */
+const FULL_FACE_FLOOR = Number(process.env.COMPOSE_MAD_FLOOR ?? 1);
 
-interface PatchIn {
-  left: number;
-  top: number;
-  side: number;
-  image: string;
+function parseDataUrl(dataUrl: unknown): Buffer | null {
+  if (typeof dataUrl !== "string") return null;
+  const match = dataUrl.match(
+    /^data:image\/(?:jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/,
+  );
+  if (!match) return null;
+  return Buffer.from(match[1], "base64");
 }
 
-function parsePatches(input: unknown): PatchIn[] {
+function parsePatches(input: unknown): Patch[] {
   if (!Array.isArray(input)) return [];
   return input
     .filter((p): p is Record<string, unknown> => typeof p === "object" && p !== null)
@@ -39,79 +63,81 @@ function parsePatches(input: unknown): PatchIn[] {
       left: Number(p.left),
       top: Number(p.top),
       side: Number(p.side),
-      image: typeof p.image === "string" ? p.image : "",
+      image: parseDataUrl(p.image),
     }))
     .filter(
-      (p) =>
+      (p): p is Patch =>
         Number.isFinite(p.left) &&
         Number.isFinite(p.top) &&
         Number.isFinite(p.side) &&
         p.side > 0 &&
-        p.image.startsWith("data:image/"),
+        p.image !== null,
     );
 }
 
 export async function POST(req: Request) {
-  let body: { image?: unknown; patches?: unknown; strength?: unknown };
+  let body: {
+    image?: unknown;
+    patches?: unknown;
+    strength?: unknown;
+    lift?: unknown;
+  };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON." }, { status: 400 });
   }
 
-  const image = typeof body.image === "string" ? body.image : "";
+  const original = parseDataUrl(body.image);
   const patches = parsePatches(body.patches);
-  if (!image.startsWith("data:image/") || patches.length === 0) {
-    return NextResponse.json(
-      { error: "An image and at least one patch are required." },
-      { status: 400 },
-    );
+  if (!original) {
+    return NextResponse.json({ error: "A valid image is required." }, { status: 400 });
   }
 
   try {
-    const res = await fetch(`${IMAGING_URL}/compose`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        image,
-        patches,
-        strength: typeof body.strength === "number" ? body.strength : 1.0,
-      }),
-      // Pure CPU compositing — a couple of seconds at most. The bound is for a
-      // service that is down, not for the work.
-      signal: AbortSignal.timeout(45_000),
-    });
-    if (!res.ok) {
-      return NextResponse.json(
-        { error: "Preview service unavailable." },
-        { status: 503 },
-      );
-    }
-    const d = await res.json();
-    if (!d?.ok || typeof d.image !== "string") {
-      return NextResponse.json(
-        { error: d?.reason ?? "Compose failed." },
-        { status: 502 },
-      );
-    }
-
-    // Measured against the original so the page can refuse to show a full-face
-    // "after" that does not actually differ from the client's own photograph —
-    // the single most damaging thing a before/after can do.
-    const buf = (s: string) => Buffer.from(s.split(",")[1] ?? "", "base64");
-    const norm = (b: Buffer) =>
-      sharp(b).resize(512, 512, { fit: "fill" }).greyscale().png().toBuffer();
-    const [a, b] = await Promise.all([norm(buf(d.image)), norm(buf(image))]);
-    const diff = await sharp(a)
-      .composite([{ input: b, blend: "difference" }])
+    // The square the browser and /api/zone both work in. Every coordinate in a
+    // patch is in this space, and it is also what the result is measured against
+    // — comparing a composite against the un-normalised upload would score the
+    // resize as if it were treatment.
+    const square = await sharp(original)
+      .resize(CANVAS, CANVAS, { fit: "cover" })
+      .removeAlpha()
       .png()
       .toBuffer();
-    const changeScore = (await sharp(diff).stats()).channels[0].mean;
+
+    const { image: composed, applied } = await composePatches(
+      square,
+      patches,
+      typeof body.strength === "number" ? body.strength : 1,
+    );
+
+    // THE FLOOR, and the reason this route no longer returns the original when
+    // every zone was rejected. Grading is a filter, not a generator: it cannot
+    // invent or delete a feature, only relight one, so it is safe to run
+    // unconditionally in a way a second generation pass would not be.
+    //
+    // Firmness is OPT-IN from the caller, not on by default: a client with no
+    // laxity concern must not be shown a lift result from a product nobody
+    // recommended them. Same gate /api/zone applies per zone.
+    const graded = await hydrationGrade(
+      composed,
+      glowStrengthFromEnv(),
+      square,
+      body.lift === true ? firmnessStrengthFromEnv() : 0,
+    );
+    const result = await gradeWithinFace(composed, graded, patches);
+
+    const score = await changeScore(result, square);
+    console.log(
+      `[compose] ${applied}/${patches.length} patches applied, ` +
+        `change ${score.toFixed(2)} (floor ${FULL_FACE_FLOOR})`,
+    );
 
     return NextResponse.json({
-      image: d.image,
-      applied: d.applied,
-      changeScore: Number(changeScore.toFixed(2)),
+      image: `data:image/jpeg;base64,${result.toString("base64")}`,
+      applied,
+      changeScore: Number(score.toFixed(2)),
+      weak: score < FULL_FACE_FLOOR,
     });
   } catch (err) {
     console.error("[compose] failed:", err);

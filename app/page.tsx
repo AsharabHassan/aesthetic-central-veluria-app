@@ -38,10 +38,20 @@ export default function Home() {
   const [analysis, setAnalysis] = useState<SkinAnalysis | null>(null);
   const [mapImage, setMapImage] = useState<string | null>(null);
   const [mapPending, setMapPending] = useState(false);
-  // The full-face "after" for the slider — a landmark warp plus the deterministic
-  // skin grade. Deliberately NOT a generation: see lib/imaging.ts.
+  // The full-face "after" for the slider — the generated close-ups composited
+  // back onto this photo, plus the deterministic skin grade as a guaranteed
+  // floor. Deliberately NOT one full-face generation: see lib/compose.ts.
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [previewPending, setPreviewPending] = useState(false);
+  /**
+   * The full-face pass finished and produced nothing.
+   *
+   * Tracked separately from `previewImage === null` because the two used to be
+   * indistinguishable, and the report rendered the same empty space for "still
+   * working", "never ran" and "failed". A blank gap where a before/after should
+   * be is the single most confusing thing this page can do.
+   */
+  const [previewFailed, setPreviewFailed] = useState(false);
   const [zoneImages, setZoneImages] = useState<Record<string, ZonePair>>({});
   // The zones we are GOING to generate, published as soon as the analysis lands
   // so the reel can reserve a card each — real header, real before panel — and
@@ -263,22 +273,36 @@ export default function Home() {
     // never deliver: the base is their own pixels so it overlays exactly, and
     // the change lands precisely on the areas the analysis flagged rather than
     // being smeared evenly over a whole face.
+    //
+    // IT RUNS EVEN WITH ZERO PATCHES, which is the fix for the owner seeing no
+    // slider at all. It used to bail here when every zone had been rejected, and
+    // since the composite was the ONLY thing producing a full-face after, one
+    // unlucky run of a lottery (the same crop measures 21.7, 17.6 and 10.5 on
+    // identical input) left the page with nothing to compare. /api/compose now
+    // grades the face itself as a guaranteed floor, so it always has an answer.
     void zonesSettled
       .then(async (pairs) => {
         const patches = pairs
           .filter((p) => p.pair.box)
           .map((p) => ({ ...p.pair.box!, image: p.pair.after }));
-        if (patches.length === 0) return null;
         const r = await fetch("/api/compose", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image, patches }),
+          body: JSON.stringify({
+            image,
+            patches,
+            // Only when a laxity concern was actually matched to Ultra Lift. A
+            // client with no laxity must not be shown a firmness result from a
+            // product nobody recommended them.
+            lift: zoneTargets.some((z) => z.product?.id === "ultra-lift"),
+          }),
         });
         return r.ok ? ((await r.json()).image as string) : null;
       })
       .catch(() => null)
       .then((img) => {
         if (img) setPreviewImage(img);
+        else setPreviewFailed(true);
         setPreviewPending(false);
       });
 
@@ -457,6 +481,7 @@ export default function Home() {
             mapPending={mapPending}
             previewImage={previewImage}
             previewPending={previewPending}
+            previewFailed={previewFailed}
             zoneTargets={zoneTargets}
             zoneImages={zoneImages}
             zonePending={zonePending}

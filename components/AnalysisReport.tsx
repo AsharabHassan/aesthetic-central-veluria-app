@@ -218,6 +218,7 @@ export default function AnalysisReport({
   mapPending,
   previewImage,
   previewPending,
+  previewFailed,
   zoneTargets,
   zoneImages,
   zonePending,
@@ -231,12 +232,15 @@ export default function AnalysisReport({
   mapImage: string | null;
   mapPending: boolean;
   /**
-   * The full-face "after" — a landmark warp plus the deterministic skin grade.
-   * Not a generation: see lib/imaging.ts for why the generated version was
-   * removed and why a warp makes the slider viable again.
+   * The full-face "after" — the generated close-ups composited back onto the
+   * client's own photograph, plus the deterministic skin grade as a guaranteed
+   * floor. Not a single full-face generation: see lib/compose.ts for why that
+   * measurably changes nothing and why assembling from close-ups does.
    */
   previewImage?: string | null;
   previewPending?: boolean;
+  /** The pass finished and produced nothing — show that, never a blank gap. */
+  previewFailed?: boolean;
   /**
    * The zones we are generating, published as soon as the analysis lands. The
    * reel reserves a card for each so nothing pops into the page mid-scroll.
@@ -519,6 +523,31 @@ export default function AnalysisReport({
               <span className="h-8 w-8 animate-[spin_1.6s_linear_infinite] rounded-full border-2 border-plum/20 border-t-plum" />
               <p className="text-sm text-plum-soft">Building your preview…</p>
             </div>
+          </div>
+        ) : previewFailed ? (
+          /*
+            NEVER AN EMPTY GAP. This branch was `null`, so when the full-face
+            pass failed the section simply had nothing in it — no image, no
+            spinner, no message. The owner opened the page, saw blank space
+            where the before/after belonged, and reasonably concluded the whole
+            feature was gone. A page that admits it could not build the preview
+            is worth far more than one that quietly omits it.
+          */
+          <div className="relative flex aspect-square w-full flex-col items-center justify-center gap-3 overflow-hidden rounded-[1.6rem] border border-white/70 bg-pearl-deep px-8 text-center">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={before}
+              alt=""
+              aria-hidden="true"
+              className="absolute inset-0 h-full w-full object-cover opacity-30 blur-sm"
+            />
+            <p className="relative text-sm font-medium text-plum">
+              We couldn&rsquo;t build your full-face preview from this photo.
+            </p>
+            <p className="relative text-xs text-plum-soft">
+              Your close-ups below are unaffected. A brighter photo taken facing
+              a window usually fixes this.
+            </p>
           </div>
         ) : null}
 
