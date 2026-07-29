@@ -230,10 +230,42 @@ export async function POST(req: Request) {
    * as "still exactly as they are" rather than a prohibition, because naming
    * the thing to keep survives the edit better than forbidding its removal.
    */
+  /**
+   * THE EXCLUSION CLAUSE, and it is phrased this way because the plain version
+   * did not work.
+   *
+   * Simply listing what to keep loses to the brief above it. That brief asks for
+   * smoother texture, more even tone and clearer skin, and the model applies
+   * those to the WHOLE face — including the very features we are asking it to
+   * leave alone. Measured on three faces with acne and pigmentation, "keep
+   * these unchanged" came back preserved=false every time: the lesions were
+   * still in place but visibly calmer.
+   *
+   * So it does not merely repeat the prohibition. It (1) scopes the improvements
+   * explicitly to the surrounding skin, resolving the contradiction at its
+   * source, (2) names the ATTRIBUTE — colour and intensity — because "keep the
+   * spot" is satisfied by a spot that is no longer red, and (3) gives a positive
+   * target: against clearer skin these should stand out MORE, not less. A model
+   * given something to aim at follows better than one given only a list of
+   * things not to do.
+   */
   const prompt = preserve.length
-    ? `${base}\n\nUNCHANGED, exactly as they are in the original photograph — same size, same shape, same colour, same position, not faded, not softened, not removed:\n${preserve
+    ? `${base}\n\n` +
+      `EXCLUDED FROM EVERY IMPROVEMENT DESCRIBED ABOVE. The smoother texture, ` +
+      `softer lines, more even tone and clearer skin described above apply ONLY ` +
+      `to the surrounding skin. This treatment does not act on the following at ` +
+      `all, and they must appear in the after photograph exactly as they do in ` +
+      `the original — same colour, same intensity, same darkness, same redness, ` +
+      `same size, same number, same position:\n${preserve
         .map((p) => `- ${p}`)
-        .join("\n")}`
+        .join("\n")}\n\n` +
+      `Anything red stays exactly as red. Anything inflamed stays exactly as ` +
+      `inflamed. Anything brown stays exactly as brown and exactly as dark. Do ` +
+      `not calm, fade, desaturate, soften, even out, blend, clear, reduce or ` +
+      `thin out any of them, and do not reduce how many there are.\n\n` +
+      `Because the skin around them is clearer, they should stand out MORE in ` +
+      `the after photograph than in the original, not less. That is the correct ` +
+      `result: healthy skin surrounding untreated marks.`
     : base;
   console.log(
     verdict.ok
@@ -368,43 +400,24 @@ export async function POST(req: Request) {
           controller.close();
           return;
         }
-        let { graded, check } = await assess(first);
+        const { graded, check } = await assess(first);
 
         /**
-         * ONE RETRY WHEN THE UNTREATABLE FEATURES WERE TOUCHED.
+         * `preserved` IS MEASURED BUT NEVER BLOCKS.
          *
-         * Measured on a face with active acne: the model kept every spot as a
-         * raised bump but DESATURATED THE REDNESS, so the skin read clear. That
-         * is treating active acne, which a booster does not do, and the appended
-         * preserve list on its own did not stop it.
+         * It briefly did both: a failed check triggered a second generation and,
+         * if that also failed, the image was withheld. That was the wrong trade.
+         * It doubled the wait and the cost for the clients least likely to
+         * tolerate either, and it answered a client who has acne or pigmentation
+         * with no picture at all — when the honest and useful answer is to show
+         * them what a booster CAN do for the rest of their skin, alongside a
+         * plain statement of what it will not touch.
          *
-         * The retry names the ATTRIBUTE rather than the object — "still red,
-         * still inflamed, the same colour" — because "keep the spot" is
-         * satisfied by a spot that is no longer red, and that is precisely the
-         * loophole the first pass took.
+         * The wording that made the retry work now lives in the first prompt, so
+         * the single pass gets the benefit. The verdict stays as a log line: it
+         * is how we find out whether the instruction is holding on real faces,
+         * without the client ever paying for the check.
          */
-        if (check?.preserved === false) {
-          console.warn(`[transform] preserve failed, retrying — ${check.note}`);
-          const harder =
-            `${prompt}\n\nCRITICAL, AND A PREVIOUS ATTEMPT GOT THIS WRONG: the ` +
-            `features listed above must keep their COLOUR and their INTENSITY, ` +
-            `not merely their position. Anything red stays exactly as red. ` +
-            `Anything inflamed stays exactly as inflamed. Anything brown stays ` +
-            `exactly as brown and exactly as dark. Do not calm, fade, ` +
-            `desaturate, even out, blend or clear any of them — this treatment ` +
-            `does not act on them at all, so they must look untreated. Improve ` +
-            `only the skin AROUND them.`;
-          const retry = await generate(harder);
-          if (retry) {
-            const second = await assess(retry);
-            // Keep the retry only if it is genuinely better on this axis.
-            if (second.check?.preserved !== false) {
-              graded = second.graded;
-              check = second.check;
-            }
-          }
-        }
-
         console.log(
           `[transform] ${QUALITY} in ${((Date.now() - started) / 1000).toFixed(0)}s` +
             (check
@@ -414,29 +427,14 @@ export async function POST(req: Request) {
               : " — identity check unavailable"),
         );
 
-        // REFUSE ON IDENTITY AND ON FALSE CLAIMS, NOT ON MAGNITUDE.
-        //
-        // Showing someone a face that is not theirs, or one where the treatment
-        // has visibly cleared something it cannot treat, are the two failures
-        // worse than showing no result at all. The second is the one a clinic
-        // is held to account for: a simulated "after" that clears active acne
-        // or a pigment patch is a claim the treatment cannot support. The page
-        // still shows the analysis, the plan, and the honest list of what a
-        // booster will not do — which is a better consultation prompt than a
-        // picture that overpromises.
+        // REFUSE ON IDENTITY ONLY. Showing someone a face that is not theirs is
+        // the one failure worse than showing no result at all — everything else
+        // the page can qualify in words, but it cannot un-show a stranger.
         if (check && !check.samePerson) {
           send({
             type: "error",
             reason: "identity",
             error: "The simulation did not hold your likeness closely enough to show.",
-            note: check.note,
-          });
-        } else if (check?.preserved === false) {
-          send({
-            type: "error",
-            reason: "claim",
-            error:
-              "We couldn't produce a preview that leaves your untreatable areas untouched, so we're not showing one.",
             note: check.note,
           });
         } else {

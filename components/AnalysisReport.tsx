@@ -221,7 +221,6 @@ export default function AnalysisReport({
   previewPending,
   previewFailed,
   previewStage,
-  previewRefusal,
   preserve,
   zoneTargets,
   zoneImages,
@@ -247,8 +246,6 @@ export default function AnalysisReport({
   previewFailed?: boolean;
   /** Generation checkpoints landed so far, driving the wait's progress bar. */
   previewStage?: number;
-  /** Why there is no preview: "claim" means we produced one and declined it. */
-  previewRefusal?: "claim" | "failed" | null;
   /** Visible features a booster cannot treat — shown as the honest limit. */
   preserve?: string[];
   /**
@@ -526,7 +523,7 @@ export default function AnalysisReport({
           </div>
         ) : previewPending ? (
           <PreviewProgress before={before} stage={previewStage ?? 0} />
-        ) : previewFailed || previewRefusal ? (
+        ) : previewFailed ? (
           /*
             NEVER AN EMPTY GAP. This branch was `null`, so when the full-face
             pass failed the section simply had nothing in it — no image, no
@@ -543,30 +540,13 @@ export default function AnalysisReport({
               aria-hidden="true"
               className="absolute inset-0 h-full w-full object-cover opacity-30 blur-sm"
             />
-            {previewRefusal === "claim" ? (
-              <>
-                <p className="relative text-sm font-medium text-plum">
-                  We&rsquo;re not showing a preview for your photo.
-                </p>
-                <p className="relative text-xs text-plum-soft">
-                  A skin booster can&rsquo;t treat everything we can see here, and
-                  the simulation kept improving areas it wouldn&rsquo;t change in
-                  real life. Rather than show you something that overpromises,
-                  we&rsquo;ve left it out — your analysis below is unaffected, and
-                  this is worth talking through with our clinician.
-                </p>
-              </>
-            ) : (
-              <>
-                <p className="relative text-sm font-medium text-plum">
-                  We couldn&rsquo;t build your full-face preview from this photo.
-                </p>
-                <p className="relative text-xs text-plum-soft">
-                  Your analysis below is unaffected. A brighter photo taken
-                  facing a window usually fixes this.
-                </p>
-              </>
-            )}
+            <p className="relative text-sm font-medium text-plum">
+              We couldn&rsquo;t build your full-face preview from this photo.
+            </p>
+            <p className="relative text-xs text-plum-soft">
+              Your analysis below is unaffected. A brighter photo taken facing a
+              window usually fixes this.
+            </p>
           </div>
         ) : null}
 

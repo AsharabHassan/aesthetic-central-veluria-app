@@ -320,8 +320,7 @@ export default function Home() {
               setPreviewImage(null);
               // A refusal on CLAIM grounds is not a breakdown — the pipeline
               // worked and declined to publish. The page says so in its own
-              // words rather than blaming the photo.
-              setPreviewRefusal(msg.reason === "claim" ? "claim" : "failed");
+              // words rather than blaming the photo.
               return null;
             }
           }
