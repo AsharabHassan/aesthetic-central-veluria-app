@@ -63,6 +63,13 @@ async function kontext(imgBuf, prompt) {
       input_image: imgBuf.toString("base64"),
       output_format: "png",
       safety_tolerance: 2,
+      // flux-2-flex exposes the sampler. More steps buys detail retention;
+      // guidance is how literally it follows the instruction. Both are the
+      // levers Pro hides, and the axis that keeps failing — a visible change
+      // that still looks photographed — is exactly what they trade against.
+      ...(MODEL.includes("flex")
+        ? { steps: Number(process.env.FLUX_STEPS ?? 50), guidance: Number(process.env.FLUX_GUIDANCE ?? 3) }
+        : {}),
     }),
   });
   if (!submit.ok) throw new Error(`submit ${submit.status}: ${(await submit.text()).slice(0, 200)}`);
