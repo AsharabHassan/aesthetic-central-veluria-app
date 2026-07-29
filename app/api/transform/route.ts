@@ -67,7 +67,17 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const SIZE = 1024;
-const QUALITY = (process.env.AFTER_QUALITY as "low" | "medium" | "high") ?? "high";
+const QUALITY = (process.env.AFTER_QUALITY as "low" | "medium" | "high") ?? "medium";
+/**
+ * How many candidates to generate and judge.
+ *
+ * Four medium candidates cost $0.21 — the same as ONE high image, which
+ * measured no better than a single medium one — and run in parallel, so the
+ * client waits ~70s rather than ~190s. The spread WITHIN one config (4, 3, 3, 1
+ * on credibility for the same face and prompt) is wider than the gap between
+ * any two configs tested, which is why picking from a handful beats tuning.
+ */
+const CANDIDATES = Number(process.env.AFTER_CANDIDATES ?? 4);
 const VERIFY_MODEL = "claude-sonnet-5";
 /**
  * How many progressive renders to stream before the final image.
@@ -78,34 +88,51 @@ const VERIFY_MODEL = "claude-sonnet-5";
  */
 const PARTIALS = Number(process.env.AFTER_PARTIAL_IMAGES ?? 3);
 
-interface Verdict {
+interface Assessment {
+  /** Would a client SEE the difference side by side? */
+  visible: number;
+  /** Does it still read as a photograph rather than a beauty filter? */
+  photographic: number;
+  /** Is the change in the flagged areas, or smeared over the whole face? */
+  targeted: number;
+  /** Would a clinician accept it as a real 12-week result? */
+  credible: number;
   samePerson: boolean;
-  improved: boolean;
-  /** Did the untreatable features survive? null when there were none to check. */
+  /** Did the untreatable features survive? null when there were none. */
   preserved: boolean | null;
   note: string;
 }
 
 /**
- * Does this still look like the same human being, and did their skin improve?
+ * Judge one candidate on the axes that decide whether a clinic can use it.
  *
- * Deliberately a separate, cheap call rather than something folded into the
- * analysis: it has to see the AFTER, which does not exist until the expensive
- * step has already run. Failing open is intentional — a verifier that is down
- * must not cost the client their result, because the generation itself is the
- * thing they waited three minutes for.
+ * THIS REPLACED A PIXEL METRIC, and the replacement is the most consequential
+ * change in this file. The pipeline was tuned for a long time against mean
+ * absolute pixel difference, which actively rewards the failure the owner
+ * rejected: a face softly airbrushed all over scores HIGHER than one where only
+ * the crow's feet and under-eye actually changed. Optimising it produced, in his
+ * words, "me with a Snapchat filter".
+ *
+ * `visible` is not optional. An earlier version of this rubric scored only
+ * things that can be spoiled — identity, realism, restraint — and duly awarded
+ * 5/5/5/5 to an image it described itself as "essentially identical, no
+ * discernible difference". A rubric made only of prohibitions is maximised by
+ * changing nothing, which is the same mistake as MAD with the sign flipped.
+ *
+ * Fails open: a verifier that is down must not cost the client the result they
+ * waited for. An unjudged candidate simply ranks below judged ones.
  */
-async function verifyIdentity(
+async function assess(
   before: Buffer,
   after: Buffer,
   preserve: string[],
-): Promise<Verdict | null> {
+): Promise<Assessment | null> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return null;
   try {
     const client = new Anthropic({ apiKey: key });
     const shrink = (b: Buffer) =>
-      sharp(b).resize(512, 512, { fit: "inside" }).jpeg({ quality: 82 }).toBuffer();
+      sharp(b).resize(640, 640, { fit: "inside" }).jpeg({ quality: 85 }).toBuffer();
     const [b1, b2] = await Promise.all([shrink(before), shrink(after)]);
 
     const msg = await client.messages.create({
@@ -113,28 +140,27 @@ async function verifyIdentity(
       max_tokens: 300,
       thinking: { type: "disabled" },
       system:
-        "You compare a client's own photograph with a simulated post-treatment " +
-        "version of it for an aesthetics clinic. Judge two things strictly and " +
-        "independently. samePerson: is this recognisably the SAME individual — " +
-        "same bone structure, same eye shape and colour, same eyebrows, same " +
-        "hairline and hairstyle, same apparent age, same skin tone and depth, " +
-        "same pose and framing? Softer lines and clearer skin are expected and " +
-        "must NOT count against it; changed eyebrows, a reshaped nose or jaw, a " +
-        "different apparent age or a lightened skin tone must. improved: is the " +
-        "skin visibly better — lines shallower, texture smoother, tone more " +
-        "even? " +
+        "You are auditing a simulated 'after' photograph for an aesthetics clinic. Image 1 is the " +
+        "client's real photograph, image 2 the simulation. Score 1-5 and reply with ONLY JSON.\n" +
+        "visible: 5 = a client would immediately SEE the improvement side by side. 1 = the two look " +
+        "the same; an unchanged image scores 1 here, never high.\n" +
+        "photographic: 5 = an unretouched camera file with individual pores and skin grain visible. " +
+        "1 = a beauty filter: poreless, waxy, plastic, blurred.\n" +
+        "targeted: 5 = the improvement sits in the concern areas and the rest of the face is " +
+        "untouched. 1 = the whole face has been uniformly smoothed.\n" +
+        "credible: 5 = a clinician would accept it as a real 12-week skin-treatment result AND it " +
+        "clearly shows one. 1 = either obviously a filter, or shows no result at all.\n" +
+        "samePerson: true only if it is unmistakably the same individual — same bone structure, eye " +
+        "shape and colour, eyebrows, hairline, apparent age, skin tone and depth, pose and framing. " +
+        "Softer lines and clearer skin are expected and must NOT count against it; changed eyebrows, " +
+        "a reshaped nose or jaw, a different apparent age or a lightened skin tone must.\n" +
         (preserve.length
-          ? "preserved: are ALL of these still present and unchanged — same " +
-            "size, shape, colour and position — in image 2? " +
-            preserve.map((p) => `"${p}"`).join("; ") +
-            ". If any has been removed, faded, smoothed away or reduced, " +
-            "preserved is false and you must say which in the note. This " +
-            "treatment cannot change them, so a picture that does is a false " +
-            "claim. "
+          ? "preserved: are ALL of these still present and unchanged — same size, shape, colour and " +
+            "position? " + preserve.map((p) => `"${p}"`).join("; ") +
+            ". This treatment cannot change them, so a picture that does is a false claim.\n"
           : "") +
-        "Reply with ONLY a JSON object: " +
-        '{"samePerson":boolean,"improved":boolean,' +
-        (preserve.length ? '"preserved":boolean,' : "") +
+        'Reply exactly: {"visible":n,"photographic":n,"targeted":n,"credible":n,"samePerson":bool,' +
+        (preserve.length ? '"preserved":bool,' : "") +
         '"note":"one short sentence"}',
       messages: [
         {
@@ -142,7 +168,7 @@ async function verifyIdentity(
           content: [
             { type: "text", text: "Image 1 — the client's own photograph:" },
             { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b1.toString("base64") } },
-            { type: "text", text: "Image 2 — the simulated after:" },
+            { type: "text", text: "Image 2 — the simulation:" },
             { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b2.toString("base64") } },
           ],
         },
@@ -153,15 +179,19 @@ async function verifyIdentity(
     if (!text || text.type !== "text") return null;
     const match = text.text.match(/\{[\s\S]*\}/);
     if (!match) return null;
-    const parsed = JSON.parse(match[0]);
+    const p = JSON.parse(match[0]);
+    const n = (v: unknown) => (typeof v === "number" && v >= 1 && v <= 5 ? v : 1);
     return {
-      samePerson: parsed.samePerson === true,
-      improved: parsed.improved === true,
-      preserved: preserve.length ? parsed.preserved === true : null,
-      note: typeof parsed.note === "string" ? parsed.note : "",
+      visible: n(p.visible),
+      photographic: n(p.photographic),
+      targeted: n(p.targeted),
+      credible: n(p.credible),
+      samePerson: p.samePerson === true,
+      preserved: preserve.length ? p.preserved === true : null,
+      note: typeof p.note === "string" ? p.note : "",
     };
   } catch (err) {
-    console.warn("[transform] identity check unavailable:", err);
+    console.warn("[transform] assessment unavailable:", err);
     return null;
   }
 }
@@ -326,15 +356,18 @@ export async function POST(req: Request) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
       };
 
-      /** One generation, streamed. Returns the final base64, or null. */
-      const generate = async (text: string): Promise<string | null> => {
-        // RAW HTTP, NOT THE SDK, and the reason is worth recording because the
-        // failure was silent and destructive. The installed openai SDK (4.104)
-        // has no `partial_images` on the images resource — only on `responses`.
+      /**
+       * One generation. Only the first candidate reports progress, because the
+       * client's bar has four steps and four candidates ticking it at once
+       * would race it to the end while the work was barely started.
+       */
+      const generate = async (text: string, reportProgress: boolean): Promise<string | null> => {
+        // RAW HTTP, NOT THE SDK. The installed openai SDK (4.104) has no
+        // `partial_images` on the images resource — only on `responses`.
         // Passing `stream: true` through it did not error: it returned the
-        // ordinary parsed response object, `for await` fell back to iterating
-        // the base64 STRING one character at a time, and a couple of million
-        // promises later dev crashed with "Map maximum size exceeded".
+        // ordinary parsed response, `for await` fell back to iterating the
+        // base64 STRING character by character, and dev died with "Map maximum
+        // size exceeded" a couple of million promises later.
         const form = new FormData();
         form.append("model", "gpt-image-2");
         form.append("image", new Blob([new Uint8Array(square)], { type: "image/png" }), "face.png");
@@ -354,7 +387,7 @@ export async function POST(req: Request) {
         });
         if (!res.ok || !res.body) {
           const detail = await res.text().catch(() => "");
-          console.error(`[transform] upstream ${res.status}: ${detail.slice(0, 400)}`);
+          console.error(`[transform] upstream ${res.status}: ${detail.slice(0, 300)}`);
           return null;
         }
 
@@ -367,7 +400,7 @@ export async function POST(req: Request) {
           if (done) break;
           buf += decoder.decode(value, { stream: true });
           // Keep the trailing fragment: a frame carrying a megabyte of base64
-          // will straddle many chunks.
+          // straddles many chunks.
           const frames = buf.split("\n\n");
           buf = frames.pop() ?? "";
           for (const frame of frames) {
@@ -381,10 +414,10 @@ export async function POST(req: Request) {
             } catch {
               continue;
             }
-            if (event.type === "image_edit.partial_image" && event.b64_json) {
+            if (event.type === "image_edit.partial_image") {
               // A CHECKPOINT, NOT A PICTURE — the client sees a progress bar,
               // never the model's half-finished draft. See PreviewProgress.
-              send({ type: "partial" });
+              if (reportProgress) send({ type: "partial" });
             } else if (event.type === "image_edit.completed" && event.b64_json) {
               b64 = event.b64_json;
             }
@@ -393,67 +426,71 @@ export async function POST(req: Request) {
         return b64;
       };
 
-      /** Grade one candidate and judge it. */
-      const assess = async (b64: string) => {
-        // The tone lock still earns its place: measured, gpt-image-2 raised
-        // facial luminance 46% on a Black subject, and that is skin-lightening
-        // whatever the prompt said. `hydrationGrade` applies it FIRST, against
-        // raw output. Glow stays at its env default — the generation is doing
-        // the work now, so this is a finishing pass, not the source of change.
-        // Firmness stays OFF, and turning it on was measured rather than
-        // assumed. At GLOW_STRENGTH=3 / FIRMNESS_STRENGTH=2 the whole-face
-        // change went DOWN, not up — 11.3 to 10.2 without the preserve clause
-        // and 15.5 to 7.6 with it. The grade's tone lock pulls luminance back
-        // toward the client's own photograph by design, so leaning on it works
-        // against the very difference we are trying to produce. lib/glow.ts
-        // says as much about itself: it is a finishing pass, not a source of
-        // change. The generation is the source.
-        const graded = await hydrationGrade(
-          Buffer.from(b64, "base64"),
-          glowStrengthFromEnv(),
-          square,
-          0,
-        );
-        return { graded, check: await verifyIdentity(square, graded, preserve) };
-      };
-
       try {
-        const first = await generate(prompt);
-        if (!first) {
+        /**
+         * BEST OF N, FIRED TOGETHER — the lever that finally moved this.
+         *
+         * A single generation is not the model's answer, it is one draw from a
+         * wide distribution. Measured on the same face, same prompt, same tier,
+         * four candidates scored 4, 3, 3 and 1 out of 5 on credibility: the
+         * spread within one config is larger than the gap between any two
+         * configs tested all session. Judging four and keeping the best lifts
+         * the typical result from ~2.5 to ~3.5.
+         *
+         * It also reprices the whole thing. Four MEDIUM candidates cost $0.21 —
+         * exactly one HIGH image, which measured no better than a single medium
+         * one — and because they run in parallel the client waits ~70s instead
+         * of ~190s. Better result, a third of the wait, same money.
+         */
+        const shots = await Promise.all(
+          Array.from({ length: Math.max(1, CANDIDATES) }, (_, i) => generate(prompt, i === 0)),
+        );
+        const made = shots.filter((s): s is string => s !== null);
+        if (!made.length) {
           send({ type: "error", error: "We couldn't generate your after image." });
           controller.close();
           return;
         }
-        const { graded, check } = await assess(first);
 
-        /**
-         * `preserved` IS MEASURED BUT NEVER BLOCKS.
-         *
-         * It briefly did both: a failed check triggered a second generation and,
-         * if that also failed, the image was withheld. That was the wrong trade.
-         * It doubled the wait and the cost for the clients least likely to
-         * tolerate either, and it answered a client who has acne or pigmentation
-         * with no picture at all — when the honest and useful answer is to show
-         * them what a booster CAN do for the rest of their skin, alongside a
-         * plain statement of what it will not touch.
-         *
-         * The wording that made the retry work now lives in the first prompt, so
-         * the single pass gets the benefit. The verdict stays as a log line: it
-         * is how we find out whether the instruction is holding on real faces,
-         * without the client ever paying for the check.
-         */
+        const graded = await Promise.all(
+          made.map((b64) =>
+            // The tone lock earns its place here: measured, gpt-image-2 raised
+            // facial luminance 46% on a Black subject, and that is
+            // skin-lightening whatever the prompt said. hydrationGrade applies
+            // it FIRST, against raw output. Firmness stays off — turning the
+            // grade up was measured and made the result LESS different, because
+            // its tone lock pulls back toward the client's own photograph.
+            hydrationGrade(Buffer.from(b64, "base64"), glowStrengthFromEnv(), square, 0),
+          ),
+        );
+        const judged = await Promise.all(graded.map((g) => assess(square, g, preserve)));
+
+        // Rank on what the clinic needs: a result the client can SEE that still
+        // looks like a photograph of them. `credible` blends both, so it leads,
+        // with `photographic` as the tie-break against a convincing-but-plastic
+        // winner. A candidate that is not the same person is unusable at any
+        // score, so it is pushed to the bottom rather than merely penalised.
+        const rank = (v: Assessment | null) =>
+          !v ? 0
+            : (v.samePerson ? 100 : 0) +
+              v.credible * 2 + v.photographic + v.visible + v.targeted;
+
+        const order = graded
+          .map((image, i) => ({ image, v: judged[i] }))
+          .sort((a, b) => rank(b.v) - rank(a.v));
+        const best = order[0];
+        const check = best.v;
+
         console.log(
-          `[transform] ${QUALITY} in ${((Date.now() - started) / 1000).toFixed(0)}s` +
-            (check
-              ? ` — same person: ${check.samePerson}, improved: ${check.improved}` +
-                (check.preserved === null ? "" : `, preserved: ${check.preserved}`) +
-                ` (${check.note})`
-              : " — identity check unavailable"),
+          `[transform] ${QUALITY} x${made.length} in ${((Date.now() - started) / 1000).toFixed(0)}s — ` +
+            `kept ${check ? `cred ${check.credible} photo ${check.photographic} vis ${check.visible}` : "unjudged"} ` +
+            `of [${judged.map((v) => (v ? v.credible : "?")).join(", ")}]` +
+            (check ? ` — same person: ${check.samePerson}, preserved: ${check.preserved} (${check.note})` : ""),
         );
 
         // REFUSE ON IDENTITY ONLY. Showing someone a face that is not theirs is
-        // the one failure worse than showing no result at all — everything else
-        // the page can qualify in words, but it cannot un-show a stranger.
+        // the one failure worse than showing no result — everything else the
+        // page can qualify in words, but it cannot un-show a stranger.
         if (check && !check.samePerson) {
           send({
             type: "error",
@@ -464,9 +501,9 @@ export async function POST(req: Request) {
         } else {
           send({
             type: "final",
-            image: `data:image/jpeg;base64,${graded.toString("base64")}`,
+            image: `data:image/jpeg;base64,${best.image.toString("base64")}`,
             verified: check?.samePerson ?? null,
-            improved: check?.improved ?? null,
+            improved: check ? check.visible >= 3 : null,
             preserved: check?.preserved ?? null,
           });
         }

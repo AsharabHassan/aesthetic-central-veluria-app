@@ -124,7 +124,7 @@ async function generate(imgBuf, prompt, quality) {
   form.append("model", "gpt-image-2");
   form.append("image", new Blob([new Uint8Array(imgBuf)], { type: "image/png" }), "face.png");
   form.append("prompt", prompt);
-  form.append("size", "1024x1024");
+  form.append("size", SIZE);
   form.append("quality", quality);
   const r = await fetch("https://api.openai.com/v1/images/edits", {
     method: "POST",
@@ -140,6 +140,8 @@ async function generate(imgBuf, prompt, quality) {
 const RUBRIC =
   "You are auditing a simulated 'after' photograph for an aesthetics clinic. Image 1 is the client's " +
   "real photograph, image 2 the simulation. Score each 1-5 and reply with ONLY JSON.\n" +
+  "visible: 5 = a client would immediately SEE the improvement side by side. 1 = the two look the same; " +
+  "an unchanged image scores 1 here, never high.\n" +
   "identity: 5 = unmistakably the same person, same age, same eyebrows, same framing. 1 = a different person.\n" +
   "photographic: 5 = looks like an unretouched camera file — individual pores, skin grain, vellus hair, " +
   "natural shine all visible. 1 = looks like a beauty-filter or smoothing app: poreless, waxy, plastic, blurred.\n" +
@@ -147,7 +149,7 @@ const RUBRIC =
   "untouched. 1 = the whole face has been uniformly smoothed and brightened.\n" +
   "credible: 5 = a dermatologist would accept this as a real 12-week result from a skin treatment. " +
   "1 = obviously impossible or obviously a filter.\n" +
-  'Reply exactly: {"identity":n,"photographic":n,"targeted":n,"credible":n,"note":"one short sentence"}';
+  'Reply exactly: {"visible":n,"identity":n,"photographic":n,"targeted":n,"credible":n,"note":"one short sentence"}';
 
 async function judge(beforeBuf, afterBuf) {
   const s = (b) => sharp(b).resize(640, 640, { fit: "inside" }).jpeg({ quality: 88 }).toBuffer();
@@ -170,6 +172,11 @@ async function judge(beforeBuf, afterBuf) {
 
 const quality = process.argv[2] ?? "medium";
 const variants = (process.argv[3] ?? "current,targeted,documentary").split(",");
+// gpt-image-2 accepts any resolution up to a 3840px edge. Everything in this
+// session ran at 1024, which gives a face very few pixels to carry pore
+// structure — a plausible cause of the "poreless, plastic" verdict.
+const SIZE = process.argv[4] ?? "1024x1024";
+const DIM = Number(SIZE.split("x")[0]);
 
 const jobs = [];
 for (const f of FACES) for (const v of variants) jobs.push({ f, v });
@@ -182,10 +189,10 @@ const rows = [];
 const CONC = 3;
 for (let i = 0; i < jobs.length; i += CONC) {
   await Promise.all(jobs.slice(i, i + CONC).map(async ({ f, v }) => {
-    const before = await sharp(f.file).resize(1024, 1024, { fit: "cover" }).png().toBuffer();
+    const before = await sharp(f.file).resize(DIM, DIM, { fit: "cover" }).png().toBuffer();
     try {
       const after = await generate(before, VARIANTS[v](f.concerns), quality);
-      await writeFile(`${OUT}/${f.id}-${v}-${quality}.jpg`, await sharp(after).jpeg({ quality: 90 }).toBuffer());
+      await writeFile(`${OUT}/${f.id}-${v}-${quality}-${DIM}.jpg`, await sharp(after).jpeg({ quality: 90 }).toBuffer());
       await writeFile(`${OUT}/${f.id}-before.jpg`, await sharp(before).jpeg({ quality: 90 }).toBuffer());
       const s = await judge(before, after);
       rows.push({ face: f.id, v, ...s });
