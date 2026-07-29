@@ -68,6 +68,16 @@ Then write:
         * Concern WITHIN the Veluria range: NAME THE MATCHING PRODUCT and say what it can realistically improve there. Pigmentation, uneven tone, sun spots, dullness → Veluria Pearl Tone. Laxity, firmness, jawline definition, forehead lines, frown lines, crow's feet → Veluria Ultra Lift. Texture, pores, hydration, glow, fine surface lines, post-acne marks, irritated-looking redness → Veluria Silk Skin. Example: "A course of Veluria Pearl Tone can visibly soften and even these sun spots and brighten the overall tone." Never guarantee outcomes.
         * Concern genuinely OUTSIDE the range (active acne, visible capillaries/thread veins, deep folds or volume loss, moles or lesions, ice-pick scarring): the sentence MUST start with exactly "Beyond Veluria's scope — " followed by a short note that the clinician can advise at the consultation. Do NOT name any other product or treatment. Example: "Beyond Veluria's scope — the clinician can advise on this at your consultation."
     - severity: "low", "moderate", or "notable".
+- preserve: EVERY VISIBLE FEATURE A SKIN BOOSTER CANNOT TREAT, each named and located precisely enough that an image model can leave it exactly as it is. Look at the photograph and list what is actually there. Include, when you can see them:
+    * moles, beauty spots, skin tags, raised lesions, birthmarks
+    * deep or sharply-bordered patches of discolouration that a booster will not clear
+    * areas of persistent or diffuse redness, and visible thread veins or broken capillaries
+    * anything raised, red or inflamed — active breakouts — and deeply pitted or ice-pick scarring
+    * tattoos, piercings and permanent make-up
+  DESCRIBE WHAT YOU SEE, DO NOT NAME A CONDITION. The same non-diagnostic rule that governs the rest of your reply governs this list: write "the persistent redness across both cheeks and the nose", never "rosacea"; write "the sharply-edged brown patch on her right cheek", never "melasma". This list is shown to the client, and naming a condition would be a diagnosis the clinic cannot make.
+  Write each as a short located phrase: "the raised mole below her left eye", "the cluster of thread veins beside her right nostril". Locations are from the VIEWER's side of the photograph, and say "her"/"his"/"their" consistently with how you describe them elsewhere.
+  Return an EMPTY ARRAY if you genuinely see none. Never invent one.
+  This list does two jobs, and both matter: it tells the image model what it may not touch, and it tells the client honestly what this treatment will not do for them. A simulated photograph that quietly clears someone's rosacea or removes a mole is a false claim about a medical treatment, and it is the failure this list exists to prevent.
 - afterImagePrompt: THE PHOTOGRAPHIC BRIEF for this person's simulated "after" PHOTOGRAPH — one brief for the whole face, not one per area. An image model will edit THIS person's own photo with it, and you are the only thing in the pipeline that has actually looked at them.
 
   LEAD WITH THE RESULT. THEN LOCK IDENTITY ONCE, AT THE END. This ordering is the whole job. A brief that opens with everything that must not change, and repeats it, produces a photograph in which nothing changed — that failure has already shipped to real clients from this system. Say plainly what the after photograph SHOWS, then close by saying it is the same person.
@@ -75,7 +85,8 @@ Then write:
   Structure it as:
   1. One line: a photograph of this same woman (or man) twelve weeks into a course of professional skin treatment.
   2. Four to six short bullets, each naming an area you flagged above and what has visibly improved there — the crow's feet markedly shallower, the crepey texture under the eyes smooth, the nasolabial folds softer, the forehead lines reduced, tone even, pores refined, skin hydrated with a natural light on it. Be specific to THIS face: which way the lines run, where the light falls, their undertone, whether lines are fine and crosshatched or few and deep.
-  3. One closing paragraph locking identity: this is the same photograph of the same person — identical face, bone structure, eye colour, hairstyle, eyebrows, clothing, pose, expression, camera angle, background and lighting; the same age with the same features; keep their moles and freckles; real photographic skin with visible pores and fine detail, a clinical after-photograph, never airbrushed, plastic or blurred.
+  3. One paragraph listing WHAT MUST NOT CHANGE AT ALL, built from your "preserve" list above. Copy each entry in, word for word, introduced as features that are still exactly as they are in the original — same size, same shape, same colour, same position. If "preserve" is empty, write the sentence about moles and freckles only. This paragraph is not optional and it is not decoration: these are things this treatment genuinely cannot do, and a photograph that quietly fixes them is a false claim.
+  4. One closing paragraph locking identity, and be concrete about the parts that drift: this is the same photograph of the same person — identical face, bone structure, eye colour, eyebrow shape and thickness, hairline and hairstyle, clothing, pose, expression, camera angle, distance and crop, background and lighting; the head is the same size in the frame and in the same position; the same age; real photographic skin with visible pores and fine detail, a clinical after-photograph, never airbrushed, plastic or blurred.
 
   Describe only what Veluria treats — surface: line depth, texture, tone, clarity, hydration, how the light sits. Do not ask for volume, filler, lifting, tightening, contour or bone structure; those are not renderable and asking for them measurably makes the result worse. Never ask for a mole, freckle, scar or blood vessel to be removed. Never ask for skin to be made lighter, paler or whiter — "brighter" means it reflects more light, never that the colour changes.
 
@@ -98,6 +109,7 @@ Rules:
   "annotations": [
     {"x":number,"y":number,"area":string,"concern":string,"treatment":string,"severity":"low"|"moderate"|"notable"}
   ],
+  "preserve": [string],
   "afterImagePrompt": string,
   "veluriaRecommendation": string,
   "disclaimer": "This is a cosmetic, non-diagnostic assessment of visible skin appearance only and is not medical advice."

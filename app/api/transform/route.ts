@@ -28,8 +28,14 @@ import type { HeroFocus } from "@/lib/hero";
  *   result-first prompt, HIGH    MAD 19.8 across the whole face, identity held
  *   result-first prompt, medium  MAD 15.6, but eyebrows and framing drifted
  *
- * So: high, and a prompt that leads with the result. Medium is a false economy
- * here — it is faster and it changes the person's eyebrows.
+ * NOW MEDIUM, because ~200s is a wait most people will not sit through and the
+ * drift turned out to be a prompt problem rather than a quality-tier one. The
+ * brief's closing lock is now explicit about the parts that actually move —
+ * eyebrow shape and thickness, hairline, camera distance and crop, head size
+ * and position in the frame — rather than the generic "same person" it said
+ * when medium was first measured. Medium runs in ~60s against high's ~200s.
+ *
+ * Set AFTER_QUALITY=high to trade the wait back for the last of the fidelity.
  *
  * THE GATE IS INVERTED, AND THAT IS THE POINT. The old pipeline's floor
  * rejected images that changed TOO LITTLE, which is the failure mode of an
@@ -45,7 +51,7 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const SIZE = 1024;
-const QUALITY = (process.env.AFTER_QUALITY as "low" | "medium" | "high") ?? "high";
+const QUALITY = (process.env.AFTER_QUALITY as "low" | "medium" | "high") ?? "medium";
 const VERIFY_MODEL = "claude-sonnet-5";
 /**
  * How many progressive renders to stream before the final image.
@@ -59,6 +65,8 @@ const PARTIALS = Number(process.env.AFTER_PARTIAL_IMAGES ?? 3);
 interface Verdict {
   samePerson: boolean;
   improved: boolean;
+  /** Did the untreatable features survive? null when there were none to check. */
+  preserved: boolean | null;
   note: string;
 }
 
@@ -74,6 +82,7 @@ interface Verdict {
 async function verifyIdentity(
   before: Buffer,
   after: Buffer,
+  preserve: string[],
 ): Promise<Verdict | null> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return null;
@@ -97,8 +106,20 @@ async function verifyIdentity(
         "must NOT count against it; changed eyebrows, a reshaped nose or jaw, a " +
         "different apparent age or a lightened skin tone must. improved: is the " +
         "skin visibly better — lines shallower, texture smoother, tone more " +
-        "even? Reply with ONLY a JSON object: " +
-        '{"samePerson":boolean,"improved":boolean,"note":"one short sentence"}',
+        "even? " +
+        (preserve.length
+          ? "preserved: are ALL of these still present and unchanged — same " +
+            "size, shape, colour and position — in image 2? " +
+            preserve.map((p) => `"${p}"`).join("; ") +
+            ". If any has been removed, faded, smoothed away or reduced, " +
+            "preserved is false and you must say which in the note. This " +
+            "treatment cannot change them, so a picture that does is a false " +
+            "claim. "
+          : "") +
+        "Reply with ONLY a JSON object: " +
+        '{"samePerson":boolean,"improved":boolean,' +
+        (preserve.length ? '"preserved":boolean,' : "") +
+        '"note":"one short sentence"}',
       messages: [
         {
           role: "user",
@@ -120,6 +141,7 @@ async function verifyIdentity(
     return {
       samePerson: parsed.samePerson === true,
       improved: parsed.improved === true,
+      preserved: preserve.length ? parsed.preserved === true : null,
       note: typeof parsed.note === "string" ? parsed.note : "",
     };
   } catch (err) {
@@ -132,6 +154,16 @@ function parseDataUrl(v: unknown): Buffer | null {
   if (typeof v !== "string") return null;
   const m = v.match(/^data:image\/(?:jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/);
   return m ? Buffer.from(m[1], "base64") : null;
+}
+
+/** Untrusted `preserve` entries → short, safe phrases. */
+function parsePreserve(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((s): s is string => typeof s === "string")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 3 && s.length <= 200)
+    .slice(0, 12);
 }
 
 function parseConcerns(v: unknown): ConcernArea[] {
@@ -154,6 +186,7 @@ export async function POST(req: Request) {
   let body: {
     image?: unknown;
     afterImagePrompt?: unknown;
+    preserve?: unknown;
     concerns?: unknown;
     hero?: unknown;
   };
@@ -179,9 +212,29 @@ export async function POST(req: Request) {
     typeof body.hero === "object" && body.hero !== null
       ? (body.hero as HeroFocus)
       : null;
-  const prompt = verdict.ok
+  const preserve = parsePreserve(body.preserve);
+  const base = verdict.ok
     ? verdict.prompt
     : buildAfterImagePrompt(parseConcerns(body.concerns), false, false, hero);
+
+  /**
+   * THE UNTREATABLE LIST IS APPENDED HERE, NOT LEFT TO THE BRIEF.
+   *
+   * Claude is asked to include it and usually does, but "usually" is the wrong
+   * standard for this one. A mole, a skin tag, rosacea, melasma, active acne, a
+   * thread vein — a skin booster does not touch any of them, so a simulation
+   * that quietly clears them is a false claim about a medical treatment, and
+   * for a clinic that is an advertising-standards problem rather than a bug.
+   *
+   * It goes LAST because the last instruction carries weight, and it is phrased
+   * as "still exactly as they are" rather than a prohibition, because naming
+   * the thing to keep survives the edit better than forbidding its removal.
+   */
+  const prompt = preserve.length
+    ? `${base}\n\nUNCHANGED, exactly as they are in the original photograph — same size, same shape, same colour, same position, not faded, not softened, not removed:\n${preserve
+        .map((p) => `- ${p}`)
+        .join("\n")}`
+    : base;
   console.log(
     verdict.ok
       ? "[transform] brief: claude-authored"
@@ -225,7 +278,8 @@ export async function POST(req: Request) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
       };
 
-      try {
+      /** One generation, streamed. Returns the final base64, or null. */
+      const generate = async (text: string): Promise<string | null> => {
         // RAW HTTP, NOT THE SDK, and the reason is worth recording because the
         // failure was silent and destructive. The installed openai SDK (4.104)
         // has no `partial_images` on the images resource — only on `responses`.
@@ -233,14 +287,10 @@ export async function POST(req: Request) {
         // ordinary parsed response object, `for await` fell back to iterating
         // the base64 STRING one character at a time, and a couple of million
         // promises later dev crashed with "Map maximum size exceeded".
-        //
-        // So the request is built by hand. It is thirty lines, it pins the
-        // exact contract the docs specify, and it avoids a major SDK upgrade
-        // for one endpoint. Revisit once the SDK ships image streaming.
         const form = new FormData();
         form.append("model", "gpt-image-2");
         form.append("image", new Blob([new Uint8Array(square)], { type: "image/png" }), "face.png");
-        form.append("prompt", prompt);
+        form.append("prompt", text);
         form.append("size", "1024x1024");
         form.append("quality", QUALITY);
         form.append("stream", "true");
@@ -254,18 +304,13 @@ export async function POST(req: Request) {
           body: form,
           signal: AbortSignal.timeout(290_000),
         });
-
         if (!res.ok || !res.body) {
           const detail = await res.text().catch(() => "");
           console.error(`[transform] upstream ${res.status}: ${detail.slice(0, 400)}`);
-          send({ type: "error", error: "We couldn't generate your after image." });
-          controller.close();
-          return;
+          return null;
         }
 
-        let finalB64: string | null = null;
-        let partials = 0;
-
+        let b64: string | null = null;
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = "";
@@ -289,53 +334,109 @@ export async function POST(req: Request) {
               continue;
             }
             if (event.type === "image_edit.partial_image" && event.b64_json) {
-              partials += 1;
-              if (partials === 1) {
-                console.log(
-                  `[transform] first partial at ${((Date.now() - started) / 1000).toFixed(0)}s`,
-                );
-              }
-              send({ type: "partial", image: `data:image/png;base64,${event.b64_json}` });
+              // A CHECKPOINT, NOT A PICTURE — the client sees a progress bar,
+              // never the model's half-finished draft. See PreviewProgress.
+              send({ type: "partial" });
             } else if (event.type === "image_edit.completed" && event.b64_json) {
-              finalB64 = event.b64_json;
+              b64 = event.b64_json;
             }
           }
         }
+        return b64;
+      };
 
-        if (!finalB64) {
-          send({ type: "error", error: "Image generation returned no result." });
-          controller.close();
-          return;
-        }
-
+      /** Grade one candidate and judge it. */
+      const assess = async (b64: string) => {
         // The tone lock still earns its place: measured, gpt-image-2 raised
         // facial luminance 46% on a Black subject, and that is skin-lightening
         // whatever the prompt said. `hydrationGrade` applies it FIRST, against
         // raw output. Glow stays at its env default — the generation is doing
         // the work now, so this is a finishing pass, not the source of change.
         const graded = await hydrationGrade(
-          Buffer.from(finalB64, "base64"),
+          Buffer.from(b64, "base64"),
           glowStrengthFromEnv(),
           square,
           0,
         );
+        return { graded, check: await verifyIdentity(square, graded, preserve) };
+      };
 
-        const check = await verifyIdentity(square, graded);
+      try {
+        const first = await generate(prompt);
+        if (!first) {
+          send({ type: "error", error: "We couldn't generate your after image." });
+          controller.close();
+          return;
+        }
+        let { graded, check } = await assess(first);
+
+        /**
+         * ONE RETRY WHEN THE UNTREATABLE FEATURES WERE TOUCHED.
+         *
+         * Measured on a face with active acne: the model kept every spot as a
+         * raised bump but DESATURATED THE REDNESS, so the skin read clear. That
+         * is treating active acne, which a booster does not do, and the appended
+         * preserve list on its own did not stop it.
+         *
+         * The retry names the ATTRIBUTE rather than the object — "still red,
+         * still inflamed, the same colour" — because "keep the spot" is
+         * satisfied by a spot that is no longer red, and that is precisely the
+         * loophole the first pass took.
+         */
+        if (check?.preserved === false) {
+          console.warn(`[transform] preserve failed, retrying — ${check.note}`);
+          const harder =
+            `${prompt}\n\nCRITICAL, AND A PREVIOUS ATTEMPT GOT THIS WRONG: the ` +
+            `features listed above must keep their COLOUR and their INTENSITY, ` +
+            `not merely their position. Anything red stays exactly as red. ` +
+            `Anything inflamed stays exactly as inflamed. Anything brown stays ` +
+            `exactly as brown and exactly as dark. Do not calm, fade, ` +
+            `desaturate, even out, blend or clear any of them — this treatment ` +
+            `does not act on them at all, so they must look untreated. Improve ` +
+            `only the skin AROUND them.`;
+          const retry = await generate(harder);
+          if (retry) {
+            const second = await assess(retry);
+            // Keep the retry only if it is genuinely better on this axis.
+            if (second.check?.preserved !== false) {
+              graded = second.graded;
+              check = second.check;
+            }
+          }
+        }
+
         console.log(
-          `[transform] ${QUALITY} in ${((Date.now() - started) / 1000).toFixed(0)}s, ` +
-            `${partials} partial(s)` +
+          `[transform] ${QUALITY} in ${((Date.now() - started) / 1000).toFixed(0)}s` +
             (check
-              ? ` — same person: ${check.samePerson}, improved: ${check.improved} (${check.note})`
+              ? ` — same person: ${check.samePerson}, improved: ${check.improved}` +
+                (check.preserved === null ? "" : `, preserved: ${check.preserved}`) +
+                ` (${check.note})`
               : " — identity check unavailable"),
         );
 
-        // REFUSE ON IDENTITY, NOT ON MAGNITUDE. Showing someone a face that is
-        // not theirs is the one failure worse than showing them no result. The
-        // client must drop any partial it is displaying when it sees this.
+        // REFUSE ON IDENTITY AND ON FALSE CLAIMS, NOT ON MAGNITUDE.
+        //
+        // Showing someone a face that is not theirs, or one where the treatment
+        // has visibly cleared something it cannot treat, are the two failures
+        // worse than showing no result at all. The second is the one a clinic
+        // is held to account for: a simulated "after" that clears active acne
+        // or a pigment patch is a claim the treatment cannot support. The page
+        // still shows the analysis, the plan, and the honest list of what a
+        // booster will not do — which is a better consultation prompt than a
+        // picture that overpromises.
         if (check && !check.samePerson) {
           send({
             type: "error",
+            reason: "identity",
             error: "The simulation did not hold your likeness closely enough to show.",
+            note: check.note,
+          });
+        } else if (check?.preserved === false) {
+          send({
+            type: "error",
+            reason: "claim",
+            error:
+              "We couldn't produce a preview that leaves your untreatable areas untouched, so we're not showing one.",
             note: check.note,
           });
         } else {
@@ -344,6 +445,7 @@ export async function POST(req: Request) {
             image: `data:image/jpeg;base64,${graded.toString("base64")}`,
             verified: check?.samePerson ?? null,
             improved: check?.improved ?? null,
+            preserved: check?.preserved ?? null,
           });
         }
       } catch (err) {

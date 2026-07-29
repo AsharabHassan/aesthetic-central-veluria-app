@@ -221,6 +221,8 @@ export default function AnalysisReport({
   previewPending,
   previewFailed,
   previewStage,
+  previewRefusal,
+  preserve,
   zoneTargets,
   zoneImages,
   zonePending,
@@ -245,6 +247,10 @@ export default function AnalysisReport({
   previewFailed?: boolean;
   /** Generation checkpoints landed so far, driving the wait's progress bar. */
   previewStage?: number;
+  /** Why there is no preview: "claim" means we produced one and declined it. */
+  previewRefusal?: "claim" | "failed" | null;
+  /** Visible features a booster cannot treat — shown as the honest limit. */
+  preserve?: string[];
   /**
    * The zones we are generating, published as soon as the analysis lands. The
    * reel reserves a card for each so nothing pops into the page mid-scroll.
@@ -520,7 +526,7 @@ export default function AnalysisReport({
           </div>
         ) : previewPending ? (
           <PreviewProgress before={before} stage={previewStage ?? 0} />
-        ) : previewFailed ? (
+        ) : previewFailed || previewRefusal ? (
           /*
             NEVER AN EMPTY GAP. This branch was `null`, so when the full-face
             pass failed the section simply had nothing in it — no image, no
@@ -537,13 +543,30 @@ export default function AnalysisReport({
               aria-hidden="true"
               className="absolute inset-0 h-full w-full object-cover opacity-30 blur-sm"
             />
-            <p className="relative text-sm font-medium text-plum">
-              We couldn&rsquo;t build your full-face preview from this photo.
-            </p>
-            <p className="relative text-xs text-plum-soft">
-              Your close-ups below are unaffected. A brighter photo taken facing
-              a window usually fixes this.
-            </p>
+            {previewRefusal === "claim" ? (
+              <>
+                <p className="relative text-sm font-medium text-plum">
+                  We&rsquo;re not showing a preview for your photo.
+                </p>
+                <p className="relative text-xs text-plum-soft">
+                  A skin booster can&rsquo;t treat everything we can see here, and
+                  the simulation kept improving areas it wouldn&rsquo;t change in
+                  real life. Rather than show you something that overpromises,
+                  we&rsquo;ve left it out — your analysis below is unaffected, and
+                  this is worth talking through with our clinician.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="relative text-sm font-medium text-plum">
+                  We couldn&rsquo;t build your full-face preview from this photo.
+                </p>
+                <p className="relative text-xs text-plum-soft">
+                  Your analysis below is unaffected. A brighter photo taken
+                  facing a window usually fixes this.
+                </p>
+              </>
+            )}
           </div>
         ) : null}
 
@@ -552,6 +575,44 @@ export default function AnalysisReport({
             A simulation of a possible outcome, shown on your own photo.
             Individual results vary and are not guaranteed. Not medical advice.
           </p>
+        )}
+
+        {/*
+          WHAT THE SIMULATION DELIBERATELY LEFT ALONE.
+
+          Sits with the after image rather than in the small print, because it
+          qualifies THAT picture and it is the honest half of the claim: a skin
+          booster does not treat a mole, a thread vein, an active breakout or a
+          deep pigment patch, so the simulation does not either. Saying it here,
+          next to the evidence, is also what makes the rest of the image
+          credible — and it is a genuine reason to book, since these are exactly
+          the findings a clinician needs to look at in person.
+        */}
+        {previewImage && preserve && preserve.length > 0 && (
+          <div className="mt-6 rounded-2xl border border-gold/30 bg-gold-soft/40 px-5 py-4">
+            <p className="text-[0.7rem] font-semibold uppercase tracking-couture text-serum">
+              Left unchanged in your preview
+            </p>
+            <p className="mt-2 text-sm text-plum">
+              A skin booster cannot treat everything, so your simulation leaves
+              these exactly as they are:
+            </p>
+            <ul className="mt-2 space-y-1">
+              {preserve.map((item) => (
+                <li key={item} className="flex gap-2 text-sm text-plum-soft">
+                  <span aria-hidden="true" className="text-serum">
+                    &middot;
+                  </span>
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 text-xs text-plum-mute">
+              These are worth showing our clinician at your consultation — some
+              need a different treatment, and anything raised or changing should
+              always be looked at in person.
+            </p>
+          </div>
         )}
 
         <div className="mt-10">

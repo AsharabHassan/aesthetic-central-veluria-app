@@ -63,6 +63,17 @@ export interface SkinAnalysis {
    * their face looked the same. See app/api/transform/route.ts.
    */
   afterImagePrompt?: string;
+  /**
+   * Visible features a skin booster cannot treat — moles, skin tags, rosacea,
+   * melasma, active acne, thread veins, scarring — each named and located by
+   * Claude from the actual photograph.
+   *
+   * Two consumers, and neither is optional. The image prompt uses it to say
+   * what must not be touched, and the report shows it to the client as the
+   * honest limit of what this treatment does. A simulation that quietly clears
+   * someone's rosacea is a false claim about a medical treatment.
+   */
+  preserve?: string[];
   veluriaRecommendation: string;
   /** Always present, non-medical disclaimer */
   disclaimer: string;

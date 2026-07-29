@@ -60,6 +60,15 @@ export default function Home() {
    * has not actually made.
    */
   const [previewStage, setPreviewStage] = useState(0);
+  /**
+   * WHY there is no after image, when there is none.
+   *
+   * "claim" means the pipeline produced one and refused to publish it: the
+   * simulation had cleared something a booster cannot treat. That is a
+   * different message from a technical failure, and telling the client the
+   * photo was bad when it was not is both wrong and unhelpful.
+   */
+  const [previewRefusal, setPreviewRefusal] = useState<"claim" | "failed" | null>(null);
   const [zoneImages, setZoneImages] = useState<Record<string, ZonePair>>({});
   // The zones we are GOING to generate, published as soon as the analysis lands
   // so the reel can reserve a card each — real header, real before panel — and
@@ -263,6 +272,9 @@ export default function Home() {
         image,
         // Claude's own brief, written from this photograph during the analysis.
         afterImagePrompt: analysisResult.afterImagePrompt,
+        // Moles, skin tags, rosacea, melasma, active acne, thread veins — the
+        // things a booster does not treat, so the picture must not treat them.
+        preserve: analysisResult.preserve,
         concerns: zoneTargets.map((z) => ({ area: z.area, concern: z.concern })),
         hero: heroArea ? { area: heroArea.area, concern: heroArea.concern } : null,
       }),
@@ -289,7 +301,7 @@ export default function Home() {
           for (const frame of frames) {
             const line = frame.split("\n").find((l) => l.startsWith("data:"));
             if (!line) continue;
-            let msg: { type?: string; image?: string };
+            let msg: { type?: string; image?: string; reason?: string };
             try {
               msg = JSON.parse(line.slice(5).trim());
             } catch {
@@ -305,9 +317,11 @@ export default function Home() {
             } else if (msg.type === "final" && msg.image) {
               final = msg.image;
             } else if (msg.type === "error") {
-              // Drop whatever partial is on screen: a refused result must not
-              // leave a half-rendered face standing as the outcome.
               setPreviewImage(null);
+              // A refusal on CLAIM grounds is not a breakdown — the pipeline
+              // worked and declined to publish. The page says so in its own
+              // words rather than blaming the photo.
+              setPreviewRefusal(msg.reason === "claim" ? "claim" : "failed");
               return null;
             }
           }
