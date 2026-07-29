@@ -1,14 +1,8 @@
 "use client";
 
-import type { ReactNode } from "react";
 import type { FaceAnnotation, AnalysisCategory } from "@/lib/types";
 import { expectedForArea } from "@/lib/expectations";
-
-const DOT: Record<string, string> = {
-  notable: "bg-[#d4574b]",
-  moderate: "bg-[#d9a441]",
-  low: "bg-[#6fae5f]",
-};
+import { SEVERITY_DOT } from "@/lib/hero";
 
 /**
  * Shows the before/after slider with a per-area list of where each flagged area
@@ -22,22 +16,25 @@ const DOT: Record<string, string> = {
  * to book for. No session count appears — that is the doctor's to say.
  */
 export default function AfterCallouts({
-  annotations,
+  concerns,
   categories,
-  children,
 }: {
-  annotations: FaceAnnotation[];
+  /**
+   * THE canonical concern list — already de-duplicated and ordered worst-first
+   * by lib/hero.ts. It used to take raw annotations and slice the first seven,
+   * which is how one real report rendered two rows both titled "Tear trough /
+   * under-eye": one badged "68 → 88" and one badged "Beyond Veluria — consult
+   * the clinician", one line apart, for the same area.
+   */
+  concerns: FaceAnnotation[];
   categories: AnalysisCategory[];
-  children: ReactNode;
 }) {
-  const items = (annotations ?? []).slice(0, 7);
+  const items = concerns.slice(0, 7);
 
   return (
-    <div>
-      {children}
-
+    <div className="mt-8">
       {items.length > 0 && (
-        <ul className="mt-5 space-y-2.5">
+        <ul className="space-y-2.5">
           {items.map((a, i) => {
             const expected = expectedForArea(a.area, categories, {
               concern: a.concern,
@@ -50,7 +47,7 @@ export default function AfterCallouts({
               >
                 <span
                   className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[0.65rem] font-semibold text-white ${
-                    DOT[a.severity] ?? DOT.moderate
+                    SEVERITY_DOT[a.severity] ?? SEVERITY_DOT.moderate
                   }`}
                 >
                   {i + 1}

@@ -45,3 +45,8 @@ next-env.d.ts
 /*.pdf
 
 certificates
+# Imaging service
+imaging/__pycache__/
+imaging/face_landmarker.task
+imaging/_probe_*.py
+.env

@@ -32,6 +32,77 @@ const SEVERITY_RANK: Record<string, number> = {
 };
 
 /**
+ * The severity palette, in ONE place.
+ *
+ * The page shows the same set of areas three times — the callout list, the
+ * close-up reel and the treatment map — and each carried its own colour scale.
+ * The map used a different red, a different amber and a different green from
+ * the other two, so a client comparing "the red one" across sections was
+ * comparing different colours for the same severity.
+ */
+export const SEVERITY_DOT: Record<string, string> = {
+  notable: "bg-[#d4574b]",
+  moderate: "bg-[#d9a441]",
+  low: "bg-[#6fae5f]",
+};
+
+/** The same three, as raw hex, for SVG/inline styles (the map's pins). */
+export const SEVERITY_HEX: Record<string, string> = {
+  notable: "#d4574b",
+  moderate: "#d9a441",
+  low: "#6fae5f",
+};
+
+/**
+ * THE canonical annotation list: de-duplicated by area, worst first.
+ *
+ * WHY IT EXISTS. Three components rendered the same concerns independently and
+ * disagreed with each other in two visible ways.
+ *
+ * DUPLICATES. Claude regularly returns two annotations naming the same area,
+ * and the prompt actively encourages it for the under-eye (it asks the model to
+ * separate the treatable skin component from the untreatable volume component).
+ * `expectedForArea` derives its badge from the AREA, but is also sensitive to
+ * the concern and treatment text — so one real report rendered two rows both
+ * titled "Tear trough / under-eye", one badged "68 → 88" and the other "Beyond
+ * Veluria — consult the clinician". The same area, told two different stories,
+ * one line apart.
+ *
+ * NUMBERING. The callout list numbered over Claude's raw order, the reel over a
+ * filtered and re-sorted list, and the map over the raw order again — so badge
+ * "3" pointed at a different area in each of the three places it appeared.
+ *
+ * Everything now derives from this one ordered list, and a zone carries its
+ * position in it (see HeroZone.index) so the numbers survive filtering.
+ *
+ * OUT-OF-SCOPE CONCERNS ARE KEPT HERE, deliberately. They are honest and
+ * valuable on the page — "Beyond Veluria — consult the clinician" is exactly
+ * the kind of candour that earns a consultation. They are filtered out only for
+ * the close-up reel, by `concernZones`, so nothing outside the range ever
+ * acquires an image implying we treated it.
+ */
+export function canonicalAnnotations(
+  annotations: FaceAnnotation[] | undefined,
+): FaceAnnotation[] {
+  const seen = new Set<string>();
+  const unique = (annotations ?? []).filter((a) => {
+    const key = a.area?.trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  // Stable sort by severity, so Claude's own ordering survives within a band.
+  return unique
+    .map((a, i) => ({ a, i }))
+    .sort(
+      (p, q) =>
+        (SEVERITY_RANK[q.a.severity] ?? 0) - (SEVERITY_RANK[p.a.severity] ?? 0) ||
+        p.i - q.i,
+    )
+    .map(({ a }) => a);
+}
+
+/**
  * The part of the hero the image prompt needs. Kept separate from HeroZone so
  * the transform route can validate an untrusted request body into something
  * honest, instead of casting a half-built object into the full UI shape.
@@ -50,8 +121,18 @@ export interface HeroZone extends HeroFocus {
   expectedLabel: string;
   /** Claude's own treatment sentence for this area, already claim-checked. */
   treatment: string;
+  /** Claude's photographic brief for this area's close-up. May be empty. */
+  imagePrompt?: string;
   /** So a crop's marker matches its row in the callout list above it. */
   severity: string;
+  /**
+   * 1-based position in the CANONICAL list — see canonicalAnnotations.
+   *
+   * Not the index in this filtered array. The reel drops out-of-scope concerns
+   * and the callout list keeps them, so numbering off each list's own position
+   * made badge "3" point at a different area in each place it appeared.
+   */
+  index: number;
 }
 
 /**
@@ -81,7 +162,15 @@ export function concernZones(
   annotations: FaceAnnotation[] | undefined,
   categories: AnalysisCategory[],
 ): HeroZone[] {
-  const candidates = (annotations ?? [])
+  // Derived from the canonical list, so the reel can never disagree with the
+  // callout list or the treatment map about which areas exist, what order they
+  // are in, or what number each one carries.
+  const canonical = canonicalAnnotations(annotations);
+  const position = new Map<FaceAnnotation, number>(
+    canonical.map((a, i) => [a, i + 1]),
+  );
+
+  const candidates = canonical
     .map((a) => {
       const expected = expectedForArea(a.area, categories, {
         concern: a.concern,
@@ -94,14 +183,13 @@ export function concernZones(
     })
     .filter((c): c is NonNullable<typeof c> => c !== null);
 
-  candidates.sort((p, q) => {
-    const bySeverity =
-      (SEVERITY_RANK[q.a.severity] ?? 0) - (SEVERITY_RANK[p.a.severity] ?? 0);
-    if (bySeverity !== 0) return bySeverity;
-    return q.expected.high - p.expected.high;
-  });
+  // NO FURTHER SORTING, and no de-duplication here — canonicalAnnotations has
+  // already done both. This used to re-sort by `expected.high` within a
+  // severity band, which silently reordered the reel relative to the callout
+  // list built from the same concerns. Canonical order is the order, everywhere.
 
   return candidates.map(({ a, expected, product }) => ({
+    index: position.get(a) ?? 1,
     area: a.area,
     concern: a.concern,
     // Clamped so a stray estimate can never crop outside the photo.
@@ -110,6 +198,7 @@ export function concernZones(
     product,
     expectedLabel: expected.label,
     treatment: a.treatment,
+    imagePrompt: a.imagePrompt,
     severity: a.severity,
   }));
 }

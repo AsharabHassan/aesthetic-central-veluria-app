@@ -179,6 +179,16 @@ function areaToCategoryLabel(area: string): string | null {
     return "Firmness & elasticity";
   if (/(line|wrinkle|crease|crow|forehead|glabella|frown|perioral|marionette|nasolabial|fold)/.test(a))
     return "Fine lines";
+  // THE UNDER-EYE, and it must come before texture for exactly the reason the
+  // laxity comment above describes — the same substring collision, missed once.
+  // The canonical area name is "Tear trough / under-eye", and "trough" contains
+  // "ROUGH", so the texture rule below swallowed every under-eye callout and the
+  // hydration rule at the bottom — which names "under-eye" and "tear trough"
+  // explicitly — was unreachable dead code for the very input it was written for.
+  // Verified: the mis-route priced a score of 65 as "65 -> 85" (texture's
+  // calibration) instead of "65 -> 90" (hydration's).
+  if (/(under[ -]?eye|tear trough|infraorbital|dark circle)/.test(a))
+    return "Hydration";
   if (/(texture|pore|rough|smooth)/.test(a)) return "Texture & pores";
   if (/(redness|red|tone|pigment|blotch|even|dark spot|melasma)/.test(a))
     return "Tone & redness";

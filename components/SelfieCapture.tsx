@@ -111,7 +111,19 @@ export default function SelfieCapture({
     frame.height = video.videoHeight;
     const fctx = frame.getContext("2d");
     if (!fctx) return;
+    // MIRROR THE CAPTURE, because the preview is mirrored.
+    //
+    // The <video> below is rendered with `scale-x-[-1]` so the client sees
+    // themselves the way a mirror shows them — which is the only way a person
+    // can frame their own face. This drew the RAW frame, so the photo flipped
+    // left-to-right at the instant of capture: someone who had carefully
+    // centred themselves got a photo where they were off to the other side.
+    // Off-centre framing is the input condition every crop in this app is worst
+    // at, so this was quietly manufacturing the hardest case for the pipeline.
+    fctx.translate(frame.width, 0);
+    fctx.scale(-1, 1);
     fctx.drawImage(video, 0, 0);
+    fctx.setTransform(1, 0, 0, 1, 0, 0);
     stopCamera();
 
     setBusy(true);

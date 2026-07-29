@@ -59,7 +59,7 @@ Score six categories from 0-100, where 100 means the skin already looks its heal
 
 Then write:
 - summary: 2-3 supportive sentences describing what you observe overall, using a confident but approachable science-led tone.
-- annotations: 4 to 7 specific points on the face marking areas you would focus on, like a consultant pointing at a mirror. For each, give:
+- annotations: 4 to 6 specific points on the face marking areas you would focus on, like a consultant pointing at a mirror. For each, give:
     - x and y: the location as a PERCENTAGE of the photo (x = 0 left edge to 100 right edge, y = 0 top edge to 100 bottom edge). Estimate carefully from where the feature actually sits on THIS face. Spread points across the relevant areas; do not stack them.
     - area: the correct aesthetic-medicine term. Use terms from this set where applicable: "Forehead lines", "Glabella / frown lines", "Periorbital lines (crow's feet)", "Tear trough / under-eye", "Cheek hydration & glow", "Nasolabial folds", "Marionette lines", "Perioral (lip) lines", "Skin texture & pores", "Uneven tone / pigmentation", "Visible redness", "Jawline & lower-face skin laxity", "Cheek & mid-face laxity".
       FIRMNESS AND LINES ARE NOT OPTIONAL. If this face shows ANY visible slackness along the jawline or across the cheeks, or any forehead, frown or crow's-feet lines, you MUST flag at least one of them as an annotation. Veluria Ultra Lift is the product that answers them, and skipping them tells the client we have nothing for the concern they are most likely to have come in with.
@@ -68,6 +68,18 @@ Then write:
         * Concern WITHIN the Veluria range: NAME THE MATCHING PRODUCT and say what it can realistically improve there. Pigmentation, uneven tone, sun spots, dullness → Veluria Pearl Tone. Laxity, firmness, jawline definition, forehead lines, frown lines, crow's feet → Veluria Ultra Lift. Texture, pores, hydration, glow, fine surface lines, post-acne marks, irritated-looking redness → Veluria Silk Skin. Example: "A course of Veluria Pearl Tone can visibly soften and even these sun spots and brighten the overall tone." Never guarantee outcomes.
         * Concern genuinely OUTSIDE the range (active acne, visible capillaries/thread veins, deep folds or volume loss, moles or lesions, ice-pick scarring): the sentence MUST start with exactly "Beyond Veluria's scope — " followed by a short note that the clinician can advise at the consultation. Do NOT name any other product or treatment. Example: "Beyond Veluria's scope — the clinician can advise on this at your consultation."
     - severity: "low", "moderate", or "notable".
+    - imagePrompt: THE PHOTOGRAPHIC BRIEF for this area's simulated "after" close-up. You are writing instructions for an image model that will edit a tight crop of THIS person's own photo, and you are the only one who has actually seen them — so describe what you can see, not what a textbook says.
+
+      WRITE ABOUT THE SURFACE OF THE SKIN AND NOTHING ELSE. This is the single most important rule and it is not about caution, it is about what works. An image model can render texture, tone, line depth, clarity and sheen. It cannot render structure. Asking it for skin that is "rebuilt", "denser", "firmer", "lifted", "plumped from beneath", or for a jaw that "sits higher", measurably makes the result WORSE — it produces a picture where nothing at all has changed. Describe only: how smooth or refined the surface is, how deep the lines are, how even and clear the tone is, how bright or shadowed the area reads, and how the light sits on it.
+
+      Write it as a photographer briefing a retoucher on a real clinical photograph. KEEP IT UNDER 70 WORDS — you are writing several of these in one reply and a long one costs the whole response. Structure it as:
+      1. One line naming the shot: a clinical close-up of this person's <area>, twelve weeks into a course of medical microneedling.
+      2. Three or four short bullets describing the improved SURFACE, each specific to what you can actually see in this photo — the direction the crepiness runs, where the light catches, the particular shade and undertone of their skin, whether the lines are fine and crosshatched or few and deep.
+      3. One closing line locking what must not change: same person, same face, same expression, same head position, same crop, same lighting, same skin colour and depth; every mole, freckle, raised spot and blood vessel exactly where it is; real skin texture, never airbrushed or plastic.
+
+      NEVER write into imagePrompt: anything about volume, filling, lifting, tightening, contour, bone structure, face shape, slimming, or age. Never ask for a spot, mole, freckle, scar or blood vessel to be removed or faded — only FLAT marks may read fainter. Never ask for skin to be made lighter, paler or whiter; "brighter" means it reflects more light, never that the colour changes.
+
+      If this concern is one Veluria cannot treat, set imagePrompt to an empty string "" — an area we do not treat must never acquire a picture implying we did.
 - veluriaRecommendation: 2-3 sentences setting out THIS person's Veluria plan. Name the specific product(s) their concerns call for and why (e.g. "Pearl Tone to even the sun damage across your cheeks, alongside Silk Skin to refine texture"). Be specific to what you actually observed. If some of their concerns genuinely sit outside the range, acknowledge that honestly in one clause and note the clinician will advise at the consultation. Warm and encouraging, never guaranteeing results. End with a gentle invitation to book a consultation.
 
 Rules:
@@ -84,7 +96,7 @@ Rules:
     {"label":"Firmness & elasticity","score":number,"note":string}
   ],
   "annotations": [
-    {"x":number,"y":number,"area":string,"concern":string,"treatment":string,"severity":"low"|"moderate"|"notable"}
+    {"x":number,"y":number,"area":string,"concern":string,"treatment":string,"severity":"low"|"moderate"|"notable","imagePrompt":string}
   ],
   "veluriaRecommendation": string,
   "disclaimer": "This is a cosmetic, non-diagnostic assessment of visible skin appearance only and is not medical advice."
@@ -127,7 +139,26 @@ export interface ConcernArea {
  * real line between a bioremodeller and a filler, and it is the line the report,
  * the expectations engine and this prompt all now draw in the same place.
  */
-function targetedAfterAction(area: string, concern: string): string {
+/**
+ * @param allowContour Whether this prompt may ask the FACE OUTLINE to move.
+ *
+ * It may only when the image stands alone. The full-face pass is displayed
+ * inside a before/after slider that assumes the two images overlay 1:1, and
+ * `images.edit` re-renders the whole frame rather than editing in place — so
+ * asking for the jaw margin to be redrawn is asking the model to move the
+ * silhouette, and it takes the background and the head position with it. On a
+ * bright, centred face the reconstruction happens to land back on the input; on
+ * a dark, off-centre, reclining one it drifts toward an upright centred
+ * portrait and the slider halves stop being the same photograph.
+ *
+ * A zone close-up is overlaid on nothing, so there the contour is free to move
+ * — which is exactly where the lift is worth having.
+ */
+function targetedAfterAction(
+  area: string,
+  concern: string,
+  allowContour = true,
+): string {
   const t = `${area} ${concern}`.toLowerCase();
 
   // Out of the range entirely: reproduce it, and improve the skin around it.
@@ -155,7 +186,13 @@ function targetedAfterAction(area: string, concern: string): string {
 
   // In scope — Ultra Lift: laxity and firmness.
   if (/(laxity|lax|sag|firm|elastic|jawline|jowl|slack|contour|neck)/.test(t))
-    return "Veluria Ultra Lift (DMAE, collagenase) works here, and THIS MUST BE OBVIOUS: the skin is visibly firmer, tighter and springier. It sits HIGHER and cleaner on the face instead of hanging — slack cheek skin is taut again, the soft heaviness along the lower face is gone, and the jaw margin reads as one clean, continuous, well-defined line instead of a soft, interrupted one. The shadow under the jaw and along the lower cheek is shallower because the skin no longer droops into it. This is the SKIN retracting and tightening, nothing else: do NOT reshape or slim the face, do NOT narrow the jaw, do NOT alter the bone structure, and do NOT add filler-style volume anywhere";
+    return allowContour
+      ? "Veluria Ultra Lift (DMAE, collagenase) works here, and THIS MUST BE OBVIOUS: the skin is visibly firmer, tighter and springier. It sits HIGHER and cleaner on the face instead of hanging — slack cheek skin is taut again, the soft heaviness along the lower face is gone, and the jaw margin reads as one clean, continuous, well-defined line instead of a soft, interrupted one. The shadow under the jaw and along the lower cheek is shallower because the skin no longer droops into it. This is the SKIN retracting and tightening, nothing else: do NOT reshape or slim the face, do NOT narrow the jaw, do NOT alter the bone structure, and do NOT add filler-style volume anywhere"
+      // Same product, same claim, but expressed as skin QUALITY rather than as
+      // a redrawn outline — see allowContour above. The crease-depth and
+      // surface changes are all still here; what is gone is every instruction
+      // to move where the edge of the face sits.
+      : "Veluria Ultra Lift (DMAE, collagenase) works here: the skin is visibly firmer, denser, tighter and springier, and it reads taut and well-supported rather than soft and tired. The creases and shadows that slack skin falls into — along the lower cheek and under the jaw — are visibly shallower and less heavy, and the skin surface there is smooth and even. Keep the OUTLINE of the face exactly where it is: the silhouette, jaw edge, chin and neckline stay in precisely the same place, the face is never reshaped, slimmed or narrowed, the bone structure never changes, and no filler-style volume is added";
 
   // In scope — Silk Skin: everything else, including post-acne marks.
   if (/(scar|post.?acne|acne mark|mark)/.test(t))
@@ -238,14 +275,14 @@ export function buildAfterImagePrompt(
 
   const heroBlock = hero
     ? `THE ONE CHANGE THAT MATTERS MOST — ${hero.area.toUpperCase()} (${hero.concern}).
-This is the headline of the image and the FIRST thing anyone must notice. ${targetedAfterAction(hero.area, hero.concern)}.
+This is the headline of the image and the FIRST thing anyone must notice. ${targetedAfterAction(hero.area, hero.concern, false)}.
 Make this the LARGEST change in the picture. It has to survive being cropped: if someone cuts a tight square around just this part of the face and holds it beside the same square from the original, the difference must be unmistakable on its own, with no other part of the face visible to help. Everything else on the face improves too, but more quietly, so nothing competes with this.
 
 `
     : "";
 
   const focus = secondary
-    .map((c) => `- ${c.area} (${c.concern}): ${targetedAfterAction(c.area, c.concern)}`)
+    .map((c) => `- ${c.area} (${c.concern}): ${targetedAfterAction(c.area, c.concern, false)}`)
     .join("\n");
 
   // When annotate is set, the SAME image also carries the treatment-map
@@ -271,11 +308,20 @@ Make this the LARGEST change in the picture. It has to survive being cropped: if
   // concern must not be shown a firmness result from a product nobody
   // recommended them. It leads the list because "firmer" is the change the
   // model is most inclined to skip, and the first bullet carries the most weight.
+  // No silhouette instructions here either — see targetedAfterAction's
+  // allowContour. This block used to demand the skin "SITS HIGHER on the face"
+  // and the jaw margin be redrawn "as one clean, continuous, well-defined
+  // line", which is a request to move the outline of a face that has to overlay
+  // the original inside a slider. The firmness claim survives intact; it is now
+  // carried by density, crease depth and surface, which the model can deliver
+  // without repainting where the face ends.
   const liftBlock = plan.some((p) => p.id === "ultra-lift")
-    ? `- LIFTED AND FIRM — THIS IS THE HEADLINE CHANGE, AND IT MUST BE OBVIOUS AT A GLANCE. The skin is denser, tighter and springier, and it SITS HIGHER on the face instead of hanging. Slack skin across the cheeks is taut. The soft heaviness along the lower face is gone and the jaw margin reads as one clean, continuous, well-defined line. Expression lines on the forehead, between the brows and at the eyes are markedly SHALLOWER and softer — softened, never erased, never smoothed into a blank waxy plane, and the person keeps their expression. The face must look genuinely FIRMER, not merely more moisturised. This is the SKIN tightening and nothing else: the face is never reshaped, slimmed or narrowed, the bone structure never changes, and no filler-style volume is added anywhere.\n`
+    ? `- FIRM AND REBUILT — THIS IS THE HEADLINE CHANGE, AND IT MUST BE OBVIOUS AT A GLANCE. The skin is denser, tighter and springier, and reads taut and well-supported rather than soft and tired. Slack skin across the cheeks is firm. The creases and shadows that slack skin falls into — along the lower cheek and under the jaw — are visibly shallower and less heavy. Expression lines on the forehead, between the brows and at the eyes are markedly SHALLOWER and softer — softened, never erased, never smoothed into a blank waxy plane, and the person keeps their expression. The face must look genuinely FIRMER, not merely more moisturised. THE OUTLINE OF THE FACE DOES NOT MOVE: the silhouette, jaw edge, chin, neckline and head position stay in exactly the same place, the face is never reshaped, slimmed or narrowed, the bone structure never changes, and no filler-style volume is added anywhere.\n`
     : "";
 
   return `Photorealistic clinical follow-up photograph of the SAME person in the first image, taken twelve weeks after their course of Veluria treatments (PB Serum's microneedled bioremodeling range, built on recombinant collagenase) at Aesthetics Central Clinic.
+
+THE CAMERA DID NOT MOVE. This is the same person photographed from the identical position on a tripod: same head size in the frame, same head position, same head angle, same crop, same framing, same background in the same place, same lighting direction. Every feature — the eyes, nose, mouth, hairline, the outline of the face and the line of the shoulders — stays at exactly the same pixel coordinates as the original. ONLY THE SKIN CHANGES. This result is shown side by side with the original and the two must overlay each other perfectly; if the head has moved, changed size, or the background has shifted, the photograph has failed no matter how good the skin looks.
 
 ${heroBlock}THE PLAN THIS PERSON HAD, AND WHAT EACH PRODUCT DID TO THEIR SKIN:
 ${planBlock}
@@ -301,6 +347,119 @@ COPY THESE ACROSS EXACTLY FROM THE ORIGINAL — same position, same size, same s
 WHAT MAY CHANGE, precisely: a FLAT mark lying level with the skin — an old post-acne mark, a sun spot, an age spot — may become fainter and less contrasted, still in exactly the same place, simply less obvious. A LINE OR CREASE may become clearly shallower and softer, still in exactly the same place, with the face keeping its expression and the skin around it never flattened into a blank waxy plane. A RAISED, RED or INFLAMED spot may not change at all, ever.
 
 Both truths at once: the things Veluria cannot treat are still plainly there, and the skin carrying them is unmistakably firmer, tighter, clearer, more even and more radiant. Side by side with the original — and especially in a tight crop of the headline area — a viewer must instantly say "their skin looks incredible". If the skin has barely changed, the image is a FAILURE. If the ONLY change is that the skin looks wetter and more moisturised, while it still hangs exactly as it did and every line is still cut exactly as deep, that is ALSO a failure. The skin must look genuinely REBUILT, not merely hydrated.${pointerBlock}${referenceLine}`;
+}
+
+/**
+ * Builds the prompt for ONE concern zone, generated on its own tight crop.
+ *
+ * WHY THIS EXISTS, and it is the most load-bearing finding in this file.
+ * `images.edit` re-renders the whole frame at 1024x1024. On a normally framed
+ * selfie the lower face is a few hundred pixels of that, and at those pixel
+ * counts gpt-image-2 treats a region as TEXTURE: it resurfaces and relights
+ * skin, and it never rebuilds a contour. Measured on one subject, Ultra Lift in
+ * the plan and laxity as the hero, the jaw region moved a mean absolute 11.1
+ * (low), 11.5 (medium) and 10.5 (short prompt) — and the jaw margin came back
+ * visually identical in all three. The same subject's lower face, cropped out
+ * and handed to the model at a full 1024px, moved 29.7 and came back genuinely
+ * lifted. The variable that mattered was never the wording. It was how many
+ * pixels the region got.
+ *
+ * So each flagged zone is generated on its own crop, at the same window
+ * ConcernZooms displays, and shown as a standalone close-up pair.
+ *
+ * IT IS NOT COMPOSITED BACK, and that is a hard limit rather than a shortcut.
+ * A lift moves the jaw silhouette, so blending it into the full-face image
+ * means blending across the face/background boundary — and the zone generation
+ * also repaints whatever background and clothing fall inside its crop. Tried:
+ * per-channel tone matching plus a 60px feathered mask still landed as a
+ * visible rectangle, because the patch's grey background met the base's black
+ * top. The full-face pass therefore stays the slider's image, and the zone
+ * crops carry the per-area proof.
+ *
+ * The prompt is short on the same evidence as buildAfterImagePrompt: the long
+ * form's restriction mass makes the outcome swing about 2x run to run on
+ * identical input. Preservation is stated once, and the last word is the demand.
+ */
+/**
+ * What the treated SURFACE looks like in this area.
+ *
+ * SKIN ONLY, and that restriction is the whole finding. The previous version of
+ * this reused `targetedAfterAction`, which describes the treatment properly for
+ * the written report — "rebuilt", "denser", "firmer", "plumped out from
+ * beneath", "the socket is not filled". All accurate, and all STRUCTURE, which
+ * is the one thing an image-edit model cannot render. Asking for it did not
+ * merely fail; it poisoned the whole request.
+ *
+ * Measured on the same under-eye crop, change score against the client's own
+ * photo:
+ *
+ *     current prompt  (structure + skin), medium   ->  5.9
+ *     skin-only prompt,                   medium   -> 25.2
+ *
+ * Four times the visible change, from deleting the part the model was never
+ * going to deliver. That is also why every close-up had stopped rendering: at
+ * 5.9 they were all falling under the visible-change floor and being dropped.
+ *
+ * The claims do not widen. Every line below is a SURFACE claim — smoother, more
+ * even, shallower, clearer, dewier — which is exactly the appearance-level
+ * wording the manufacturer uses and the only kind a filter-like edit can honour.
+ * Structure still gets described honestly in the written report, where words can
+ * do what pixels cannot.
+ */
+function skinAction(area: string, concern: string): string {
+  const t = `${area} ${concern}`.toLowerCase();
+
+  if (/(dark circle|under[ -]?eye|tear trough|periorbital|infraorbital|eye bag)/.test(t))
+    return `- the crepey, finely-crosshatched texture under her eyes is gone, replaced by smooth, even skin
+- the fine lines there are much shallower and softer, still in the same places
+- the area reads brighter, clearer and less shadowed`;
+
+  if (/(line|wrinkle|crease|crow|forehead|glabella|frown|perioral)/.test(t))
+    return `- the lines here are markedly shallower and softer, each one still in exactly the same place
+- the skin between them is smooth, even and firm-looking
+- she keeps her natural expression — nothing is flattened into a blank plane`;
+
+  if (/(pigment|dark spot|sun spot|age spot|discolou?r|uneven tone|sallow|blotch|tone)/.test(t))
+    return `- the tone is clearly more even and the complexion reads clear and luminous
+- discrete sun spots and pigment patches are softer and much less contrasted against the skin around them — still present, just far less obvious
+- her actual skin colour and depth are completely unchanged; freckles are untouched`;
+
+  if (/(texture|pore|rough|bumpy|congest|uneven)/.test(t))
+    return `- the surface is resurfaced smooth, even and refined, with the roughness gone
+- pores are visible but tight and clean
+- the skin looks like healthy skin, never airbrushed or plastic`;
+
+  if (/(redness|red|irritat|reactive|inflam)/.test(t))
+    return `- the angry, irritated-looking redness reads calmer and much less inflamed
+- the skin there is smoother and better hydrated
+- any distinct visible blood vessels are exactly as they were`;
+
+  if (/(scar|post.?acne|acne mark|mark)/.test(t))
+    return `- the flat marks left behind by old breakouts are softer and much less contrasted — still there, just far less obvious
+- the surrounding skin is smooth, even and clear`;
+
+  return `- the surface is smooth, even and refined
+- the skin is plump and well-hydrated, with a healthy dewy sheen where the light falls
+- the tone is even and the area reads clear and bright`;
+}
+
+/**
+ * The close-up prompt.
+ *
+ * SHORT, POSITIVE, AND ABOUT THE SURFACE. Long restriction-heavy prompts made
+ * the outcome swing about 2x run to run on identical input; this one states the
+ * preservation once and spends the rest of its length on what the skin looks
+ * like. It reads like a photographer's brief rather than a legal document,
+ * which is the register the model actually responds to.
+ */
+export function buildZonePrompt(zone: ConcernArea): string {
+  return `Professional clinical skin photograph, close-up of the same woman's ${zone.area.toLowerCase()}, twelve weeks into a course of medical microneedling.
+
+Her SKIN QUALITY has visibly improved and this must be obvious:
+${skinAction(zone.area, zone.concern)}
+- the skin is plump and well-hydrated, with a healthy dewy sheen where the light falls
+
+Same woman, same face, same expression, same head position, same crop, same lighting, same skin colour and depth. Keep every mole, freckle, spot and blood vessel exactly where it is. Real skin texture — never airbrushed, plastic or blurred. Photographic and unretouched-looking, shot on a clinical camera.`;
 }
 
 /**

@@ -1,0 +1,68 @@
+# One droplet, many domains.
+#
+# Caddy is a virtual-host reverse proxy: each site block below is matched on the
+# Host header, so a single droplet with a single IP serves any number of
+# domains. Caddy provisions and renews a SEPARATE TLS certificate per hostname
+# from Let's Encrypt automatically — nothing to configure, nothing to remember
+# to renew.
+#
+# TLS is not a nicety here: the selfie step calls getUserMedia, which browsers
+# refuse to run on plain HTTP, so a domain without a working certificate has no
+# camera and therefore no funnel.
+#
+# DNS: point an A record for every hostname below at the droplet's IPv4 (and
+# AAAA at its IPv6 if enabled). Caddy will not obtain a certificate until DNS
+# resolves to this machine, so add the DNS record first.
+
+# --- The skin consultation app -------------------------------------------
+{$SITE_DOMAIN:localhost} {
+	encode zstd gzip
+
+	# Client photographs arrive as data URLs and run to a few MB.
+	request_body {
+		max_size 25MB
+	}
+
+	# The imaging service is deliberately NOT exposed here. It receives raw
+	# client photographs, has no authentication of its own, and is reachable
+	# only from `web` over the internal compose network.
+	reverse_proxy web:3000
+
+	log {
+		output file /data/access-skin.log {
+			roll_size 10MB
+			roll_keep 5
+		}
+	}
+}
+
+# --- Additional sites on the same droplet ---------------------------------
+#
+# Each block is independent: its own certificate, its own upstream, its own
+# logs. An upstream can be another container in this compose project, a
+# container from a DIFFERENT compose project sharing an external network, or a
+# plain port on the host.
+#
+# Uncomment and adapt. Multiple hostnames can share one block by listing them
+# comma-separated, which is the right shape for apex + www.
+#
+# aestheticscentral.co.uk, www.aestheticscentral.co.uk {
+# 	encode zstd gzip
+# 	reverse_proxy marketing-site:3000
+# }
+#
+# another-client.co.uk {
+# 	encode zstd gzip
+# 	reverse_proxy other-app:8080
+# }
+#
+# Redirect apex to www (or the reverse) rather than serving both:
+# www.example.co.uk {
+# 	redir https://example.co.uk{uri} permanent
+# }
+#
+# A static site needs no upstream at all:
+# static.example.co.uk {
+# 	root * /srv/static
+# 	file_server
+# }

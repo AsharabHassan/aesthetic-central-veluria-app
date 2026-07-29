@@ -3,12 +3,24 @@ import { buildEventPayload, parseGhlMeta } from "@/lib/ghl";
 
 export const runtime = "nodejs";
 
-/** Only events this app fires. An open string field would let anything through. */
+/**
+ * Only events this app fires. An open string field would let anything through.
+ *
+ * Rebuilt around the close-up reel, which is now the entire visual proof. It
+ * was also the one section with NO CRM telemetry: `ConcernZoomsViewed` and
+ * `ConcernZoomsReady` were fired by the page but missing from this list, so
+ * every one of them was rejected with a 400 and only ever reached the pixel.
+ *
+ * `SliderDragged` is back: the full-face before/after returned, driven by a
+ * landmark warp instead of a generation. Dropped: `PreviewViewed`, and
+ * `HeroZoomViewed` / `ProgressionStepped`, whose components were deleted — two
+ * of the six originally allow-listed events could never fire at all.
+ */
 const ALLOWED = new Set([
-  "PreviewViewed",
-  "HeroZoomViewed",
+  "ReelViewed",
   "SliderDragged",
-  "ProgressionStepped",
+  "ConcernZoomsViewed",
+  "ConcernZoomsReady",
   "BookingClicked",
   "ReportCompleted",
 ]);

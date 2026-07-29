@@ -99,10 +99,74 @@ async function toJpeg(dataUrl: string, quality = 0.82): Promise<string> {
   }
 }
 
+/** One generated close-up: the area's name and its two registered panels. */
+export interface ZoneSheetItem {
+  area: string;
+  before: string;
+  after: string;
+}
+
+/**
+ * Stack every surviving close-up into ONE labelled sheet.
+ *
+ * Replaces the single full-face before/after this file used to compose. That
+ * pair no longer exists: the full-face generation was removed because it did
+ * not visibly change a real photo, and the per-area close-ups are the proof
+ * now. Each row is one area, captioned, in the same Now / After grammar the
+ * client has already read on the page — so the download and the emailed PDF
+ * carry the same evidence they were looking at.
+ */
+export async function composeZoneReel(
+  zones: ZoneSheetItem[],
+  format: "png" | "jpeg" = "png",
+  quality = 0.9,
+): Promise<string> {
+  const PANEL = 768;
+  const LABEL = 54;
+  const rows = zones.slice(0, 4);
+  const W = PANEL * 2;
+  const H = rows.length * (PANEL + LABEL);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return zones[0]?.after ?? "";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, W, H);
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const top = i * (PANEL + LABEL);
+    const [b, a] = await Promise.all([loadImage(row.before), loadImage(row.after)]);
+
+    ctx.fillStyle = "#3a2f4a";
+    ctx.font = "600 28px Georgia, serif";
+    ctx.textBaseline = "middle";
+    ctx.fillText(row.area, 20, top + LABEL / 2);
+
+    drawCover(ctx, b, 0, top + LABEL, PANEL, PANEL);
+    drawCover(ctx, a, PANEL, top + LABEL, PANEL, PANEL);
+    drawPill(ctx, "NOW", 20, top + LABEL + 20, "rgba(255,255,255,0.9)", "#212121");
+    drawPill(ctx, "AFTER VELURIA", PANEL + 20, top + LABEL + 20, "#212121", "#ffffff");
+
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(PANEL, top + LABEL);
+    ctx.lineTo(PANEL, top + LABEL + PANEL);
+    ctx.stroke();
+  }
+
+  return format === "jpeg"
+    ? canvas.toDataURL("image/jpeg", quality)
+    : canvas.toDataURL("image/png");
+}
+
 export interface AnalysisPdfOptions {
   analysis: SkinAnalysis;
   before: string;
-  after: string | null;
+  zonePairs: { zone: { area: string }; pair: { before: string; after: string } }[];
   map: string | null;
 }
 
@@ -112,13 +176,22 @@ export interface AnalysisPdfOptions {
  * client-side download and the base64 encoder used for GHL report delivery.
  */
 async function buildAnalysisPdf(opts: AnalysisPdfOptions) {
-  const { analysis, before, after, map } = opts;
-  // Build the labelled side-by-side before/after (real selfie + generated after).
-  // JPEG here (not PNG): a photographic PNG bloats the PDF to several MB, which
-  // makes the emailed / GHL-hosted report slow to open.
-  const beforeAfter = after
-    ? await composeBeforeAfter(before, after, "jpeg", 0.82)
-    : null;
+  const { analysis, before, zonePairs, map } = opts;
+  // The close-up sheet, in place of the retired full-face pair. JPEG here (not
+  // PNG): a photographic PNG bloats the PDF to several MB, which makes the
+  // emailed / GHL-hosted report slow to open.
+  const beforeAfter =
+    zonePairs.length > 0
+      ? await composeZoneReel(
+          zonePairs.map((z) => ({
+            area: z.zone.area,
+            before: z.pair.before,
+            after: z.pair.after,
+          })),
+          "jpeg",
+          0.82,
+        )
+      : null;
   const mapJpeg = map ? await toJpeg(map, 0.82) : null;
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ unit: "pt", format: "a4", compress: true });
@@ -259,10 +332,12 @@ async function buildAnalysisPdf(opts: AnalysisPdfOptions) {
   });
   y += 4;
 
-  // Before/after — labelled side-by-side composite (2:1).
+  // The close-up sheet. One row per area, so the height scales with how many
+  // close-ups actually survived rather than being a fixed 2:1.
   if (beforeAfter) {
-    heading("Before & After — your treatment preview");
-    const h = cw * 0.5;
+    heading("Your close-ups — before & after");
+    const ROW_ASPECT = (768 + 54) / (768 * 2); // matches composeZoneReel
+    const h = cw * ROW_ASPECT * zonePairs.length;
     ensure(h + 4);
     doc.addImage(beforeAfter, "JPEG", margin, y, cw, h);
     y += h + 16;

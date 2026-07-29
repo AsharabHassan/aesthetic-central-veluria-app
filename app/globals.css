@@ -451,3 +451,20 @@
     max-width: 100% !important;
   }
 }
+
+/*
+  Shimmer for the close-up "after" panel while its simulation is still running.
+  The card reserves its slot up front so the page does not jump as results land,
+  which left an empty white square beside a photograph — that reads as broken,
+  not as loading. A sweep plus a spinner says "working" without pretending to
+  know how far along it is.
+*/
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  60%,
+  100% {
+    transform: translateX(100%);
+  }
+}

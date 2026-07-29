@@ -1,0 +1,107 @@
+# Aesthetics Central — self-hosted stack.
+#
+# Off Vercel deliberately: these are UK clients' face photographs, and keeping
+# biometric-adjacent personal data on infrastructure the clinic controls is a
+# materially better data-protection position than shipping every selfie to a US
+# image API. It also removes per-image vendor billing from the funnel.
+#
+# Nothing here needs a GPU. The imaging service is CPU-only by design — the
+# lift is a warp and the skin work is masked contrast, both exact and free. A
+# GPU worker for diffusion inpainting can be added later as one more service;
+# it is deliberately NOT a dependency of anything below.
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    environment:
+      NODE_ENV: production
+      IMAGING_URL: http://imaging:8000
+      DATABASE_URL: postgres://aesthetics:${POSTGRES_PASSWORD}@db:5432/aesthetics
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: consultations
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      NEXT_PUBLIC_CALENDAR_URL: ${NEXT_PUBLIC_CALENDAR_URL}
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
+    depends_on:
+      imaging:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  imaging:
+    build: ./imaging
+    # Never exposed publicly. Only `web` talks to it, over the internal network
+    # — it takes raw client photographs and has no authentication of its own.
+    expose:
+      - "8000"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # MediaPipe + OpenCV on a 1024px frame sits well inside this; the cap
+          # is here so a malformed upload cannot take the host down.
+          memory: 1500M
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: aesthetics
+      POSTGRES_USER: aesthetics
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aesthetics -d aesthetics"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    restart: unless-stopped
+
+  minio:
+    # Photos live here, not in Postgres. Object storage also makes the retention
+    # policy enforceable: consultations.purge_after drives a nightly delete.
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - miniodata:/data
+    restart: unless-stopped
+
+  proxy:
+    # Caddy over nginx purely for automatic TLS — the selfie step needs HTTPS
+    # to reach the camera at all, and certificate renewal is not something this
+    # project should ever have to think about again.
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - web
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  caddydata:
+  caddyconfig:

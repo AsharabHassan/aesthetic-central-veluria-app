@@ -34,6 +34,20 @@ export interface FaceAnnotation {
   /** Suggested treatment direction (Veluria where skin-quality related) */
   treatment: string;
   severity: "low" | "moderate" | "notable";
+  /**
+   * The image prompt for THIS area's close-up, written by Claude during the
+   * analysis rather than assembled from a template here.
+   *
+   * WHY CLAUDE WRITES IT. Claude has actually looked at the photograph. A
+   * template can only say "the texture is smoother"; Claude can say what this
+   * person's skin is actually doing — the direction the crepe runs, how the
+   * light falls, what shade the skin is — and an image model responds to a
+   * specific photographic description far better than to a generic one.
+   *
+   * Optional: an older analysis, or a model that omits it, falls back to the
+   * template in lib/prompts.ts.
+   */
+  imagePrompt?: string;
 }
 
 export interface SkinAnalysis {

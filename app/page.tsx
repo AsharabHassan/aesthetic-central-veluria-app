@@ -7,10 +7,28 @@ import Processing from "@/components/Processing";
 import AnalysisReport from "@/components/AnalysisReport";
 import type { SkinAnalysis, LeadPayload } from "@/lib/types";
 import type { GhlMeta } from "@/lib/ghl";
-import { heroFirst, heroZone, type HeroZone } from "@/lib/hero";
+import { concernZones, heroZone, type HeroZone } from "@/lib/hero";
 import { DISCLAIMER_SHORT } from "@/lib/legal";
 
 type Step = "welcome" | "capture" | "form" | "processing" | "result" | "error";
+
+/**
+ * How many areas get their own generated close-up.
+ *
+ * Each is a separate ~60s generation billed on its own, so this is a real cost
+ * lever. Three is chosen over "all of them": the reel is ordered worst-first,
+ * so three covers the concerns the client actually came in with, and a page of
+ * three unmistakable changes converts better than seven faint ones.
+ */
+const ZONE_LIMIT = Number(process.env.NEXT_PUBLIC_ZONE_LIMIT ?? 3);
+
+/** Generated per-area close-ups, keyed by `area|concern`. */
+export type ZonePair = {
+  before: string;
+  after: string;
+  /** Where this crop came from, for compositing back onto the whole face. */
+  box?: { left: number; top: number; side: number };
+};
 
 export default function Home() {
   const [step, setStep] = useState<Step>("welcome");
@@ -18,10 +36,19 @@ export default function Home() {
   const [lead, setLead] = useState<LeadPayload | null>(null);
   const [leadMeta, setLeadMeta] = useState<GhlMeta | null>(null);
   const [analysis, setAnalysis] = useState<SkinAnalysis | null>(null);
-  const [afterImage, setAfterImage] = useState<string | null>(null);
-  const [afterPending, setAfterPending] = useState(false);
   const [mapImage, setMapImage] = useState<string | null>(null);
   const [mapPending, setMapPending] = useState(false);
+  // The full-face "after" for the slider — a landmark warp plus the deterministic
+  // skin grade. Deliberately NOT a generation: see lib/imaging.ts.
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [previewPending, setPreviewPending] = useState(false);
+  const [zoneImages, setZoneImages] = useState<Record<string, ZonePair>>({});
+  // The zones we are GOING to generate, published as soon as the analysis lands
+  // so the reel can reserve a card each — real header, real before panel — and
+  // fill the right-hand side in as results arrive, instead of popping whole
+  // cards into a page the client is already scrolling.
+  const [zoneTargets, setZoneTargets] = useState<HeroZone[]>([]);
+  const [zonePending, setZonePending] = useState(false);
   // The single area the preview leads on — see lib/hero.ts. Held here rather
   // than recomputed in the report so the image and the on-page zoom are
   // guaranteed to be talking about the same part of the face.
@@ -36,36 +63,51 @@ export default function Home() {
     setLead(null);
     setLeadMeta(null);
     setAnalysis(null);
-    setAfterImage(null);
-    setAfterPending(false);
     setMapImage(null);
     setMapPending(false);
+    setPreviewImage(null);
+    setPreviewPending(false);
+    setZoneImages({});
+    setZoneTargets([]);
+    setZonePending(false);
     setHero(null);
     setErrorMsg("");
     setStep("welcome");
   };
 
-  const fetchAfter = (
-    image: string,
-    quality: "low" | "medium",
-    areas: { area: string; concern: string }[] = [],
-    annotate = false,
-    hero: HeroZone | null = null,
-  ) =>
-    fetch("/api/transform", {
+  /**
+   * The per-area close-ups, each generated on its own tight crop.
+   *
+   * Keyed by area|concern so a zone's pair can be looked up without depending
+   * on list order. See app/api/zone/route.ts for why these are generated
+   * separately instead of being cropped out of the full-face image.
+   */
+  const fetchZone = (image: string, zone: HeroZone) =>
+    fetch("/api/zone", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         image,
-        quality,
-        areas,
-        annotate,
-        hero: hero ? { area: hero.area, concern: hero.concern } : null,
+        zone: {
+          area: zone.area,
+          concern: zone.concern,
+          x: zone.x,
+          y: zone.y,
+          // Written by Claude during the analysis, from the actual photograph.
+          imagePrompt: zone.imagePrompt,
+        },
       }),
     })
       .then(async (r) => {
         const d = await r.json().catch(() => ({}));
-        return r.ok ? (d.image as string) : null;
+        return r.ok && d.before && d.after
+          ? {
+              before: d.before as string,
+              after: d.after as string,
+              // Carried so the close-up can be pasted back onto the whole face.
+              box: d.box as ZonePair["box"],
+            }
+          : null;
       })
       .catch(() => null);
 
@@ -77,7 +119,7 @@ export default function Home() {
     activeLead: LeadPayload,
     analysisResult: SkinAnalysis,
     before: string,
-    after: string | null,
+    zonePairs: { zone: HeroZone; pair: ZonePair }[],
     map: string | null,
   ) => {
     if (reportSent.current) return;
@@ -87,7 +129,7 @@ export default function Home() {
       const pdfBase64 = await analysisReportPdfBase64({
         analysis: analysisResult,
         before,
-        after,
+        zonePairs,
         map,
       });
       const [firstName, ...rest] = activeLead.name.trim().split(/\s+/);
@@ -118,10 +160,12 @@ export default function Home() {
     const activeLead = leadData ?? lead;
     const activeMeta = metaData ?? leadMeta;
     setStep("processing");
-    setAfterImage(null);
     setMapImage(null);
-    setAfterPending(true);
+    setPreviewImage(null);
+    setZoneImages({});
+    setZoneTargets([]);
     setMapPending(true);
+    setPreviewPending(true);
 
     let analysisResult: SkinAnalysis;
     try {
@@ -155,21 +199,13 @@ export default function Home() {
       }).catch(() => {});
     }
 
-    // The headline area, and it must lead the concern list: the prompt weights
-    // its first bullet most heavily and the route caps the list at six.
+    // The headline area. It no longer orders any prompt — it survives because
+    // the booking link carries it as `focus` and every funnel event reports it.
     const heroArea = heroZone(
       analysisResult.annotations,
       analysisResult.categories,
     );
     setHero(heroArea);
-
-    const concerns = heroFirst(
-      analysisResult.annotations?.map((a) => ({
-        area: a.area,
-        concern: a.concern,
-      })) ?? [],
-      heroArea,
-    );
 
     const mapZones =
       analysisResult.annotations?.map((a) => ({
@@ -177,34 +213,74 @@ export default function Home() {
         severity: a.severity,
       })) ?? [];
 
-    // Two-pass reveal. A "medium" generation takes ~60s, and stacked on top of
-    // the analysis (~15s) and the map (~25s) that left the client staring at a
-    // loading screen for well over a minute — long enough to read as broken and
-    // to abandon. "low" returns in ~26s and already looks the part, so show it
-    // as soon as it lands and quietly swap in the sharper pass behind it.
+    // THE CLOSE-UPS ARE NOW THE WHOLE PREVIEW.
     //
-    // afterPromise must still resolve with the SHARP image: the PDF/report waits
-    // on it. And the preview must never overwrite the sharp pass if it arrives
-    // second, hence the flag.
-    let refined = false;
+    // There used to be a full-face generation here as well, shown in a
+    // before/after slider. It is gone, and the measurements are the reason.
+    // `images.edit` re-renders the entire frame, so at full-face scale any one
+    // area is a few hundred pixels and the model treats it as texture rather
+    // than structure: the jaw region moved a mean absolute 11.1 / 11.5 / 10.5
+    // across three prompt variants and came back visually identical every time.
+    // On a dark real-world photo the whole-frame change fell to ~4.5, most of
+    // which was background. The SAME region, cropped out and generated on its
+    // own at a full 1024px, moved 29.7 and came back genuinely changed.
+    //
+    // The variable was never the wording — six prompt rewrites in this repo's
+    // history say so. It is how many pixels the region gets.
+    const zoneTargets = concernZones(
+      analysisResult.annotations,
+      analysisResult.categories,
+    ).slice(0, ZONE_LIMIT);
+    // Published so the reel can reserve a card per zone immediately, header and
+    // real BEFORE panel and all, instead of popping cards in as results land.
+    setZoneTargets(zoneTargets);
+    setZonePending(zoneTargets.length > 0);
 
-    fetchAfter(image, "low", concerns, false, heroArea).then((preview) => {
-      if (preview && !refined) {
-        setAfterImage(preview);
-        setAfterPending(false);
-      }
-    });
+    const zonesSettled = Promise.all(
+      zoneTargets.map((z) =>
+        fetchZone(image, z).then((pair) => {
+          // Land each one as it arrives rather than waiting for the slowest, so
+          // the reel fills in progressively instead of appearing all at once.
+          if (pair) {
+            setZoneImages((prev) => ({ ...prev, [`${z.area}|${z.concern}`]: pair }));
+          }
+          return pair ? { zone: z, pair } : null;
+        }),
+      ),
+    ).then((rs) => rs.filter((r): r is NonNullable<typeof r> => r !== null));
+    void zonesSettled.finally(() => setZonePending(false));
 
-    const afterPromise = fetchAfter(image, "medium", concerns, false, heroArea).then(
-      (afterImg) => {
-        if (afterImg) {
-          refined = true;
-          setAfterImage(afterImg);
-        }
-        setAfterPending(false);
-        return afterImg;
-      },
-    );
+    // THE FULL-FACE "AFTER", ASSEMBLED FROM THE CLOSE-UPS.
+    //
+    // Not generated. A single full-face pass measurably changes nothing — the
+    // jaw moved ~11 across three prompt variants and looked identical every
+    // time — which is why the slider was removed twice. The close-ups DO work:
+    // each is generated on its own 1024px crop and scores 16-23. So the
+    // whole-face result is those close-ups pasted back onto the client's own
+    // photograph, masked to the skin of the face by the landmark service.
+    //
+    // Two properties follow, and they are the ones the generated version could
+    // never deliver: the base is their own pixels so it overlays exactly, and
+    // the change lands precisely on the areas the analysis flagged rather than
+    // being smeared evenly over a whole face.
+    void zonesSettled
+      .then(async (pairs) => {
+        const patches = pairs
+          .filter((p) => p.pair.box)
+          .map((p) => ({ ...p.pair.box!, image: p.pair.after }));
+        if (patches.length === 0) return null;
+        const r = await fetch("/api/compose", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image, patches }),
+        });
+        return r.ok ? ((await r.json()).image as string) : null;
+      })
+      .catch(() => null)
+      .then((img) => {
+        if (img) setPreviewImage(img);
+        setPreviewPending(false);
+      });
 
     const mapPromise = fetch("/api/map", {
       method: "POST",
@@ -222,12 +298,16 @@ export default function Home() {
         return mapImg;
       });
 
-    // Once both visual assets have settled (success or not), generate the branded
-    // PDF and deliver it to GHL — so the emailed report matches what the client
-    // sees on screen. Fire-and-forget; a missing image just drops from the PDF.
+    // Once the close-ups and the map have settled (success or not), generate the
+    // branded PDF and deliver it to GHL — so the emailed report matches what the
+    // client sees on screen. Fire-and-forget; a missing image just drops out.
+    //
+    // Waits on the ZONES now, not on a full-face pass: they are the proof, so an
+    // email that went out before they existed would carry a report with no
+    // evidence in it.
     if (activeLead) {
-      Promise.all([afterPromise, mapPromise]).then(([afterImg, mapImg]) =>
-        sendReport(activeLead, analysisResult, image, afterImg, mapImg),
+      Promise.all([zonesSettled, mapPromise]).then(([zonePairs, mapImg]) =>
+        sendReport(activeLead, analysisResult, image, zonePairs, mapImg),
       );
     }
   };
@@ -373,10 +453,13 @@ export default function Home() {
           <AnalysisReport
             key="result"
             before={selfie}
-            after={afterImage}
-            afterPending={afterPending}
             mapImage={mapImage}
             mapPending={mapPending}
+            previewImage={previewImage}
+            previewPending={previewPending}
+            zoneTargets={zoneTargets}
+            zoneImages={zoneImages}
+            zonePending={zonePending}
             hero={hero}
             analysis={analysis}
             email={lead?.email ?? null}

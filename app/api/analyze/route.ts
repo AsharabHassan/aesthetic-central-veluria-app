@@ -61,7 +61,17 @@ export async function POST(req: Request) {
   const callModel = async (nudge?: string) =>
     client.messages.create({
       model: MODEL,
-      max_tokens: 3000,
+      // 3000 was right when an annotation was four short fields. It is not now:
+      // each annotation also carries `imagePrompt`, a 60-90 word photographic
+      // brief, and at 4-7 annotations that is roughly 1500-2500 extra tokens.
+      // The response was being truncated mid-object, so the JSON never parsed,
+      // both attempts failed, and the client was told "we couldn't analyse that
+      // photo" — for a photo that was completely fine.
+      //
+      // Sized with real headroom rather than to the measured minimum: running
+      // out here costs a whole consultation, and unused output tokens cost
+      // nothing.
+      max_tokens: 8000,
       // Sonnet 5 runs adaptive thinking by default — keep it off for this
       // fast, structured-JSON vision call so responses stay quick and the
       // token budget goes entirely to the analysis.
@@ -96,16 +106,29 @@ export async function POST(req: Request) {
       msg.content.find((b) => b.type === "text")?.text?.trim() ?? "";
     let parsed = extractJson(text);
 
-    // One retry if the model didn't return clean JSON.
+    // One retry if the model didn't return clean JSON — and the nudge depends
+    // on WHY it failed. Truncation and malformed output need opposite advice:
+    // telling a truncated response to "respond with only the JSON object" makes
+    // it produce the same too-long reply again, which is exactly how this
+    // failed silently twice in a row and cost a real consultation.
     if (!parsed) {
+      const truncated = msg.stop_reason === "max_tokens";
+      console.warn(
+        `[analyze] unparseable reply (stop_reason=${msg.stop_reason}, ${text.length} chars) — retrying ${truncated ? "shorter" : "stricter"}`,
+      );
       msg = await callModel(
-        "Your previous reply was not valid JSON. Respond with ONLY the JSON object specified, nothing else.",
+        truncated
+          ? "Your previous reply was cut off before it finished. Send the same JSON object again, but keep every imagePrompt to 50 words or fewer and use at most 5 annotations, so the whole object fits in one reply."
+          : "Your previous reply was not valid JSON. Respond with ONLY the JSON object specified, nothing else.",
       );
       text = msg.content.find((b) => b.type === "text")?.text?.trim() ?? "";
       parsed = extractJson(text);
     }
 
     if (!parsed) {
+      console.error(
+        `[analyze] gave up after retry (stop_reason=${msg.stop_reason}, ${text.length} chars)`,
+      );
       return NextResponse.json(
         { error: "We couldn't analyse that photo. Please try another." },
         { status: 422 },

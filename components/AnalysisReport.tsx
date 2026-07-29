@@ -14,12 +14,12 @@ import CaseStudy from "./CaseStudy";
 import VeluriaRejuvenation from "./VeluriaRejuvenation";
 import { bookingUrl, planSummary, type CtaPlacement } from "@/lib/booking";
 import { expectedImprovement } from "@/lib/expectations";
-import { concernZones, type HeroZone } from "@/lib/hero";
+import { canonicalAnnotations, concernZones, type HeroZone } from "@/lib/hero";
 import { track, trackServer } from "@/lib/meta";
 import { planFor } from "@/lib/veluria";
 import { DISCLAIMER_FULL } from "@/lib/legal";
 import {
-  composeBeforeAfter,
+  composeZoneReel,
   downloadAnalysisPdf,
   downloadDataUrl,
 } from "@/lib/download";
@@ -76,56 +76,8 @@ function PhoneConsultButton({
           strokeLinejoin="round"
         />
       </svg>
-      Book a Free Consultation
+      {label}
     </a>
-  );
-}
-
-const PREVIEW_STEPS = [
-  "Reading your skin map…",
-  "Applying a realistic treatment outcome…",
-  "Refining tone, texture & hydration…",
-  "Finishing your before & after…",
-];
-
-function PreviewLoader({ before }: { before: string }) {
-  const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setElapsed((e) => e + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
-  const pct = Math.min(95, Math.round(100 * (1 - Math.exp(-elapsed / 22))));
-  const step =
-    PREVIEW_STEPS[Math.min(Math.floor(elapsed / 14), PREVIEW_STEPS.length - 1)];
-
-  return (
-    <div className="relative aspect-[3/2] overflow-hidden rounded-[1.6rem] border border-white/70 bg-pearl-deep shadow-dew">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={before}
-        alt="Your photo"
-        className="h-full w-full scale-105 object-cover blur-md brightness-95"
-      />
-      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-plum-mute/40 to-transparent" />
-      <div className="absolute inset-0 flex flex-col items-center justify-center gap-5 bg-white/40 px-8 text-center backdrop-blur-sm">
-        <div className="relative h-14 w-14">
-          <div className="absolute inset-0 rounded-full border border-plum/15" />
-          <div className="absolute inset-0 animate-[spin_3s_linear_infinite] rounded-full border-2 border-transparent border-t-plum" />
-        </div>
-        <p className="text-sm tracking-wide text-plum">{step}</p>
-        <div className="w-full max-w-xs">
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/70">
-            <div
-              className="h-full rounded-full bg-plum transition-all duration-1000 ease-out"
-              style={{ width: `${pct}%` }}
-            />
-          </div>
-          <p className="mt-2 text-[0.65rem] uppercase tracking-[0.15em] text-plum-soft">
-            {pct}% · {elapsed}s
-          </p>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -177,25 +129,26 @@ function SectionHead({
  * available four times.
  */
 function StickyCta({
-  afterPending,
-  after,
-  previewRef,
-  seenPreview,
+  zonePending,
+  shown,
+  reelRef,
+  seenReel,
   href,
   onBook,
 }: {
-  afterPending: boolean;
-  after: string | null;
-  previewRef: React.RefObject<HTMLElement | null>;
-  /** True once the preview section has been on screen at least once. */
-  seenPreview: boolean;
+  zonePending: boolean;
+  /** How many close-ups have actually landed. */
+  shown: number;
+  reelRef: React.RefObject<HTMLElement | null>;
+  /** True once the reel section has been on screen at least once. */
+  seenReel: boolean;
   href: string;
   onBook: () => void;
 }) {
   const [scrolledPast, setScrolledPast] = useState(false);
 
   useEffect(() => {
-    const el = previewRef.current;
+    const el = reelRef.current;
     if (!el) return;
     const observer = new IntersectionObserver(
       ([entry]) => setScrolledPast(!entry.isIntersecting),
@@ -203,10 +156,10 @@ function StickyCta({
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [previewRef]);
+  }, [reelRef]);
 
-  const scrollToPreview = () => {
-    previewRef.current?.scrollIntoView({ behavior: "smooth" });
+  const scrollToReel = () => {
+    reelRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
   if (!scrolledPast) return null;
@@ -214,20 +167,20 @@ function StickyCta({
   return (
     <div className="no-print fixed bottom-4 inset-x-0 z-40 flex justify-center px-4 pointer-events-none">
       <div className="pointer-events-auto flex max-w-[calc(100vw-2rem)] items-center gap-2.5 rounded-full border border-white/70 bg-white/85 px-4 py-2.5 backdrop-blur-xl shadow-[0_8px_32px_-10px_rgba(34,30,82,0.35)] sm:gap-3 sm:px-5 sm:py-3">
-        {afterPending ? (
+        {zonePending && shown === 0 ? (
           <>
             <span className="h-4 w-4 shrink-0 animate-[spin_1.5s_linear_infinite] rounded-full border-2 border-plum/20 border-t-plum" />
-            <span className="text-sm text-plum">Generating your before &amp; after…</span>
+            <span className="text-sm text-plum">Preparing your close-ups…</span>
           </>
-        ) : after && !seenPreview ? (
+        ) : shown > 0 && !seenReel ? (
           <>
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="shrink-0 text-plum">
               <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
               <path d="M5 8.5l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-            <span className="text-sm font-medium text-plum">Your before &amp; after is ready</span>
+            <span className="text-sm font-medium text-plum">Your close-ups are ready</span>
             <button
-              onClick={scrollToPreview}
+              onClick={scrollToReel}
               className="ml-1 shrink-0 rounded-full bg-plum px-4 py-1.5 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-white shadow-sm transition hover:bg-plum-soft"
             >
               View ↑
@@ -261,10 +214,13 @@ function StickyCta({
 
 export default function AnalysisReport({
   before,
-  after,
-  afterPending,
   mapImage,
   mapPending,
+  previewImage,
+  previewPending,
+  zoneTargets,
+  zoneImages,
+  zonePending,
   hero,
   analysis,
   email,
@@ -272,10 +228,23 @@ export default function AnalysisReport({
   onRestart,
 }: {
   before: string;
-  after: string | null;
-  afterPending: boolean;
   mapImage: string | null;
   mapPending: boolean;
+  /**
+   * The full-face "after" — a landmark warp plus the deterministic skin grade.
+   * Not a generation: see lib/imaging.ts for why the generated version was
+   * removed and why a warp makes the slider viable again.
+   */
+  previewImage?: string | null;
+  previewPending?: boolean;
+  /**
+   * The zones we are generating, published as soon as the analysis lands. The
+   * reel reserves a card for each so nothing pops into the page mid-scroll.
+   */
+  zoneTargets?: HeroZone[];
+  /** Per-area close-ups generated on their own crops, keyed `area|concern`. */
+  zoneImages?: Record<string, { before: string; after: string }>;
+  zonePending?: boolean;
   /** The single area the preview leads on — see lib/hero.ts. */
   hero?: HeroZone | null;
   analysis: SkinAnalysis;
@@ -288,36 +257,49 @@ export default function AnalysisReport({
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const previewRef = useRef<HTMLElement>(null);
+  const reelRef = useRef<HTMLElement>(null);
 
-  // The same derivation the after-image prompt uses, run over the same
-  // annotations AND the same category scores — so the products named under the
-  // preview are exactly the ones allowed to change the image above it.
-  const concernList = (analysis.annotations ?? []).map((a) => ({
+  // THE canonical concern list — de-duplicated, worst first, numbered once.
+  // Every list on this page derives from it, so the callout rows, the reel and
+  // the treatment map can no longer disagree about which areas exist, what
+  // order they are in, or what number each one carries. See lib/hero.ts.
+  const concerns = canonicalAnnotations(analysis.annotations);
+
+  const concernList = concerns.map((a) => ({
     area: a.area,
     concern: a.concern,
   }));
-  // planFor, NOT programmeFor, and the page and the picture must agree on this.
-  // `programmeFor` widens the product list using the category scores, but the
-  // image is still generated from `planFor` — so naming the wider list here
-  // would caption the preview with a product whose effect was never applied to
-  // it. Whichever derivation the image uses, this has to be the same one.
+  // planFor, NOT programmeFor. `programmeFor` widens the product list using the
+  // category scores, but only the products a concern actually matched get to
+  // change a picture — so naming the wider list would caption the close-ups
+  // with a product whose effect was never applied to them.
   const programme = planFor(concernList);
 
   // Every in-scope area, worst first. Out-of-scope concerns are filtered out by
   // lib/hero.ts, so nothing here can imply we treat something we do not.
-  const zones = concernZones(analysis.annotations, analysis.categories);
+  const allZones = concernZones(analysis.annotations, analysis.categories);
+  // The reel renders the zones we actually asked for, so a card exists (header,
+  // real before panel, shimmering after) from the moment the analysis lands.
+  // Before the fan-out publishes them, fall back to the full list.
+  const reelZones = zoneTargets && zoneTargets.length > 0 ? zoneTargets : allZones;
+  // How many close-ups actually made it onto the page. Drives the peak-proof CTA
+  // and the product caption: a zone whose generation failed, or which did not
+  // clear the visible-change floor in /api/zone, must not be spoken about.
+  const shownZones = reelZones.filter(
+    (z) => zoneImages?.[`${z.area}|${z.concern}`],
+  );
+  const shownProgramme = planFor(
+    shownZones.map((z) => ({ area: z.area, concern: z.concern })),
+  );
 
-  const zoomsRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  // Sits directly below the before/after slider: reaching it means the client
-  // has actually scrolled past the image, not merely arrived at the section
-  // that contains it.
-  const previewSeenRef = useRef<HTMLDivElement>(null);
+  // Sits directly below the reel: reaching it means the client has actually
+  // scrolled past the proof, not merely arrived at the section containing it.
+  const reelSeenRef = useRef<HTMLDivElement>(null);
   // Drives the sticky bar's switch from "your preview is ready" to the booking
   // CTA: once they have actually seen the preview, telling them it exists is
   // wasted space and the ask should take it.
-  const [seenPreview, setSeenPreview] = useState(false);
+  const [seenReel, setSeenReel] = useState(false);
   // Every funnel event fires at most once per report. Without this, the
   // observers below would re-fire on each scroll past and the counts would
   // measure scrolling rather than reach.
@@ -377,8 +359,7 @@ export default function AnalysisReport({
   */
   useEffect(() => {
     const targets: [React.RefObject<HTMLElement | null>, string][] = [
-      [previewSeenRef, "PreviewViewed"],
-      [zoomsRef, "ConcernZoomsViewed"],
+      [reelSeenRef, "ReelViewed"],
       [bottomRef, "ReportCompleted"],
     ];
     const observers = targets.map(([ref, event]) => {
@@ -388,7 +369,7 @@ export default function AnalysisReport({
         ([entry]) => {
           if (entry.isIntersecting) {
             fire(event);
-            if (ref === previewSeenRef) setSeenPreview(true);
+            if (ref === reelSeenRef) setSeenReel(true);
             io.disconnect();
           }
         },
@@ -398,23 +379,38 @@ export default function AnalysisReport({
       return io;
     });
     return () => observers.forEach((io) => io?.disconnect());
-  }, [fire, after]);
+    // Re-runs when the first close-up lands, because the sentinel below the reel
+    // does not exist in the DOM until the section has something to sit under.
+  }, [fire, shownZones.length]);
 
   const handlePdf = async () => {
     setPdfBusy(true);
     try {
-      await downloadAnalysisPdf({ analysis, before, after, map: mapImage });
+      await downloadAnalysisPdf({
+        analysis,
+        before,
+        zonePairs: shownZones.map((z) => ({
+          zone: z,
+          pair: zoneImages![`${z.area}|${z.concern}`],
+        })),
+        map: mapImage,
+      });
     } finally {
       setPdfBusy(false);
     }
   };
 
-  // The "before" is the real selfie and "after" is generated separately; for a
-  // downloadable artifact we stitch them into one labelled side-by-side image.
-  const handleDownloadBeforeAfter = async () => {
-    if (!after) return;
-    const composite = await composeBeforeAfter(before, after);
-    downloadDataUrl(composite, "od-aesthetics-before-after.png");
+  // One labelled sheet of every close-up that made it onto the page — the
+  // shareable artifact, now that there is no single full-face pair to stitch.
+  const handleDownloadCloseUps = async () => {
+    if (shownZones.length === 0) return;
+    const sheet = await composeZoneReel(
+      shownZones.map((z) => ({
+        area: z.area,
+        ...zoneImages![`${z.area}|${z.concern}`],
+      })),
+    );
+    downloadDataUrl(sheet, "aesthetics-central-close-ups.png");
   };
 
   return (
@@ -471,73 +467,109 @@ export default function AnalysisReport({
         />
       </section>
 
-      {/* Before / After */}
-      <section ref={previewRef} className="animate-fade-scale" style={{ animationDelay: "80ms" }}>
+      {/*
+        SECTION 01 — the close-up reel, and it is now the whole visual proof.
+
+        This slot used to hold a full-face before/after slider. It was removed
+        on measurement, not taste: `images.edit` re-renders the entire frame, so
+        at full-face scale any one area is a few hundred pixels and comes back
+        retextured rather than changed. The jaw moved a mean absolute ~11 across
+        three prompt variants and looked identical every time; the same region
+        generated on its own crop moved 29.7 and looked genuinely different.
+
+        The reel also solves what the slider never could: a slider parks at 50%,
+        putting the LEFT half of one face beside the RIGHT half of another, and
+        even swept it asks the viewer to diff a whole face from memory. A tight
+        pair, side by side, is one fixation.
+      */}
+      <section ref={reelRef} className="animate-fade-scale" style={{ animationDelay: "80ms" }}>
         <SectionHead index="01" eyebrow="Before & After" title="Your treatment preview" />
-        {after ? (
+
+        {/*
+          THE SLIDER, THIRD TIME — and the difference is where the "after" comes
+          from. The first two attempts fed it a full-face generation and then a
+          landmark warp, and both failed for the same reason: neither put a
+          visible change on the AREAS THE CLIENT WAS TOLD ABOUT. A generation
+          smears a faint change over the whole face; a warp moves only the jaw.
+          Either way a slider parked at 50% shows nothing worth looking at.
+
+          This "after" is the close-ups themselves, composited back onto the
+          client's own photograph and masked to the skin of the face. So the
+          change is exactly where the report says it is, it is as strong as the
+          close-ups are, and every pixel outside the face is untouched — which
+          is what makes the two halves genuinely the same photograph.
+        */}
+        {previewImage ? (
           <div className="relative liquid-reveal">
             <div className="relative z-0 animate-reveal-blur">
-              <AfterCallouts
-                annotations={analysis.annotations}
-                categories={analysis.categories}
-              >
-                <BeforeAfterSlider
-                  before={before}
-                  after={after}
-                  onDrag={() => fire("SliderDragged")}
-                />
-              </AfterCallouts>
+              <BeforeAfterSlider
+                before={before}
+                after={previewImage}
+                onDrag={() => fire("SliderDragged")}
+              />
             </div>
             <div className="sheen-line rounded-[1.6rem]" />
           </div>
-        ) : afterPending ? (
-          <PreviewLoader before={before} />
-        ) : (
-          <div className="overflow-hidden rounded-[1.6rem] border border-white/70">
+        ) : previewPending ? (
+          <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-[1.6rem] border border-white/70 bg-pearl-deep">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={before} alt="Your photo" className="w-full" />
-            <p className="bg-white/70 p-3 text-center text-xs text-plum-soft">
-              We couldn&rsquo;t render your visual preview this time — your full
-              analysis is below.
+            <img src={before} alt="" aria-hidden="true" className="absolute inset-0 h-full w-full object-cover opacity-40 blur-sm" />
+            <div className="absolute inset-0 -translate-x-full animate-[shimmer_1.8s_ease-in-out_infinite] bg-gradient-to-r from-transparent via-white/50 to-transparent" />
+            <div className="relative flex flex-col items-center gap-3">
+              <span className="h-8 w-8 animate-[spin_1.6s_linear_infinite] rounded-full border-2 border-plum/20 border-t-plum" />
+              <p className="text-sm text-plum-soft">Building your preview…</p>
+            </div>
+          </div>
+        ) : null}
+
+        {previewImage && (
+          <p className="mt-3 text-center text-xs italic text-plum-mute">
+            A simulation of a possible outcome, shown on your own photo.
+            Individual results vary and are not guaranteed. Not medical advice.
+          </p>
+        )}
+
+        <div className="mt-10">
+          <SectionHead index="02" eyebrow="Look closely" title="Your close-ups" />
+        </div>
+
+        <ConcernZooms
+          before={before}
+          zones={reelZones}
+          zoneImages={zoneImages}
+          zonePending={zonePending}
+          onReady={() => fire("ConcernZoomsReady")}
+          onVisible={() => fire("ConcernZoomsViewed")}
+        />
+
+        {/*
+          Nothing cleared the visible-change floor. Say so plainly rather than
+          leaving an empty section or, worse, showing pairs that look identical
+          — /api/zone would rather return nothing than return a dud, and the
+          page has to honour that. The written analysis below and the real
+          client result further down both still stand on their own.
+        */}
+        {!zonePending && shownZones.length === 0 && (
+          <div className="rounded-2xl border border-white/70 bg-white/55 p-5 text-center backdrop-blur-sm">
+            <p className="text-sm leading-relaxed text-plum">
+              We couldn&rsquo;t produce a close-up preview we&rsquo;re happy with
+              from this photo.
+            </p>
+            <p className="mt-2 text-xs leading-relaxed text-plum-soft">
+              Your full skin analysis is below, and a brighter, front-on photo in
+              daylight usually gives us much more to work with.
             </p>
           </div>
         )}
-        {/*
-          Name the plan against the image. The preview used to be captioned only
-          with a disclaimer, so a client saw a better-looking face and was never
-          told WHICH product produced it or how many sessions it takes — there
-          was nothing concrete to book. The maintenance note is deliberate too:
-          the DMAE evidence shows the effect is partially regressive once a
-          course stops, which is an argument for a repeat course rather than a
-          weakness to hide.
-        */}
-        {/*
-          The zoom is the thing that makes the change legible — a whole-face
-          slider asks people to diff two faces from memory, which is exactly the
-          comparison the eye is worst at. It goes directly under the slider,
-          before anything else competes for attention, and the CTA that follows
-          is the one at peak impact.
-        */}
-        {/* Reach sentinel: they have scrolled past the before/after image. */}
-        <div ref={previewSeenRef} aria-hidden="true" className="h-px w-full" />
 
-        {after && zones.length > 0 && (
-          <div ref={zoomsRef}>
-            <ConcernZooms
-              before={before}
-              after={after}
-              zones={zones}
-              onReady={() => fire("ConcernZoomsReady")}
-            />
-          </div>
-        )}
+        {/* Reach sentinel: they have scrolled past the proof. */}
+        <div ref={reelSeenRef} aria-hidden="true" className="h-px w-full" />
 
         {/*
           Peak proof. They have just watched every flagged area improve one at a
-          time; this is the moment the ask is worth the most, so it goes here
-          rather than waiting for the end of the section.
+          time; this is the moment the ask is worth the most.
         */}
-        {after && zones.length > 0 && (
+        {shownZones.length > 0 && (
           <div className="mt-7 flex flex-col items-center gap-2">
             <PhoneConsultButton
               href={ctaHref("hero-zoom")}
@@ -550,16 +582,34 @@ export default function AnalysisReport({
           </div>
         )}
 
+        {/*
+          Every flagged area, including the ones Veluria cannot treat.
+          Deliberately BELOW the reel: it is instantly-available text, so it
+          gives the client something real to read while the close-ups generate,
+          without pushing the proof itself down the page.
 
-        {after && programme.length > 0 && (
+          It is also the page's claim-discipline safety net — the only list that
+          names out-of-scope concerns with the amber "Beyond Veluria" pill, and
+          by construction those never acquire a picture.
+        */}
+        <AfterCallouts concerns={concerns} categories={analysis.categories} />
+
+        {/*
+          Name the plan against the pictures. Derived from the zones that
+          actually SURVIVED, not from every annotation: a card can be dropped
+          when its generation does not clear the floor, and naming a product
+          whose close-up was never shown would caption a result that is not on
+          the page.
+        */}
+        {shownProgramme.length > 0 && (
           <div className="mt-5 rounded-2xl border border-white/70 bg-white/55 p-4 text-center backdrop-blur-sm">
             <p className="text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-plum-soft">
-              This preview shows
+              These close-ups show
             </p>
             <p className="mt-2 text-sm leading-relaxed text-plum">
-              {programme.map((p, i) => (
+              {shownProgramme.map((p, i) => (
                 <span key={p.id}>
-                  {i > 0 && (i === programme.length - 1 ? " with " : ", ")}
+                  {i > 0 && (i === shownProgramme.length - 1 ? " with " : ", ")}
                   <strong className="font-semibold">{p.name}</strong>
                 </span>
               ))}
@@ -578,11 +628,12 @@ export default function AnalysisReport({
         </p>
         <div className="mt-6 flex flex-col items-center gap-2">
           <PhoneConsultButton
-            href={ctaHref(hero ? "hero-zoom" : "preview")}
-            onClick={onBookingClick(hero ? "hero-zoom" : "preview")}
+            href={ctaHref("preview")}
+            onClick={onBookingClick("preview")}
+            label="Discuss these with our team"
           />
           <p className="text-xs text-plum-mute">
-            Discuss your preview with our team — no cost, no obligation.
+            No cost, no obligation.
           </p>
         </div>
       </section>
@@ -607,22 +658,22 @@ export default function AnalysisReport({
       {(analysis.annotations?.length > 0 || mapPending || mapImage) && (
         <section className="animate-fade-scale" style={{ animationDelay: "120ms" }}>
           <SectionHead
-            index="02"
+            index="03"
             eyebrow="Where Treatment Works"
             title="Your treatment map"
           />
           <div className="relative">
             <AnnotatedFace
-              image={after ?? before}
-              annotations={analysis.annotations}
+              image={before}
+              concerns={concerns}
               mapImage={mapImage}
               mapPending={mapPending}
               onOpen={(src) => setLightbox(src)}
             />
           </div>
           <p className="mt-4 text-center text-xs italic text-plum-mute">
-            Markers show areas identified for treatment, drawn on your simulated
-            result. AI-estimated for guidance only — not a clinical diagnosis.
+            Markers show areas identified for treatment, drawn on your own
+            photo. AI-estimated for guidance only — not a clinical diagnosis.
             A consultation with our team confirms the right plan for you.
           </p>
         </section>
@@ -630,7 +681,7 @@ export default function AnalysisReport({
 
       {/* Written analysis */}
       <section className="animate-fade-scale" style={{ animationDelay: "160ms" }}>
-        <SectionHead index="03" eyebrow="In-Depth Analysis" title="What we see" />
+        <SectionHead index="04" eyebrow="In-Depth Analysis" title="What we see" />
         <div className="glass p-6 sm:p-8">
           <p className="leading-relaxed text-plum">{analysis.summary}</p>
           <div className="my-6 hairline" />
@@ -729,12 +780,12 @@ export default function AnalysisReport({
             </button>
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-center gap-x-5 gap-y-1 text-xs text-plum-soft">
-            {after && (
+            {shownZones.length > 0 && (
               <button
-                onClick={handleDownloadBeforeAfter}
+                onClick={handleDownloadCloseUps}
                 className="underline-offset-4 transition hover:text-plum hover:underline"
               >
-                ↓ Before/After image
+                ↓ Download your close-ups
               </button>
             )}
             {mapImage && (
@@ -818,7 +869,7 @@ export default function AnalysisReport({
                     lightbox,
                     lightbox === mapImage
                       ? "skin-assessment-map.png"
-                      : "od-aesthetics-before-after.png",
+                      : "aesthetics-central-close-ups.png",
                   )
                 }
                 className="btn-serum"
@@ -835,10 +886,10 @@ export default function AnalysisReport({
 
       {mounted && createPortal(
         <StickyCta
-          afterPending={afterPending}
-          after={after}
-          previewRef={previewRef}
-          seenPreview={seenPreview}
+          zonePending={zonePending ?? false}
+          shown={shownZones.length}
+          reelRef={reelRef}
+          seenReel={seenReel}
           href={ctaHref("sticky")}
           onBook={onBookingClick("sticky")}
         />,

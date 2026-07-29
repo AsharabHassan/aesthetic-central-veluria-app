@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { detectFace, framingForFace } from "@/lib/faceBox";
 
 const OUT = 1024;
 
@@ -37,13 +38,43 @@ export default function FaceFramer({
   // Centre of the crop, as a fraction of the image (0-1).
   const [cx, setCx] = useState(0.5);
   const [cy, setCy] = useState(0.4);
+  /** True once a real detection has moved the crop off the blind default. */
+  const [autoFramed, setAutoFramed] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ px: number; py: number } | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     const i = new Image();
-    i.onload = () => setImg(i);
+    i.onload = async () => {
+      if (cancelled) return;
+      setImg(i);
+
+      // Seed the crop from an ACTUAL face detection when the browser has one.
+      //
+      // This is not a return to the rejected approach above: that used a vision
+      // model's estimated coordinates, which were offset and oversized. This is
+      // the platform's own face detector, and when it is absent or finds
+      // nothing, detectFace returns null and the manual defaults below are left
+      // untouched. A wrong box is never invented — the worst case is exactly
+      // the behaviour that shipped before.
+      const face = await detectFace(i);
+      if (cancelled || !face) return;
+      const f = framingForFace(face, i.width, i.height);
+      const c = clamp(i, f.zoom, f.cx, f.cy);
+      setZoom(f.zoom);
+      setCx(c.x);
+      setCy(c.y);
+      setAutoFramed(true);
+    };
     i.src = src;
+    return () => {
+      cancelled = true;
+    };
+    // clamp/cropSide are pure helpers over their arguments, so they need no
+    // dependency entry; re-running this on anything but a new photo would undo
+    // the client's own adjustments.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src]);
 
   /** Side of the source-image square we are cropping, in source pixels. */
@@ -133,8 +164,9 @@ export default function FaceFramer({
     <div className="mx-auto w-full max-w-sm text-center">
       <p className="display text-3xl text-plum">Frame your face</p>
       <p className="mx-auto mt-2 max-w-xs text-sm text-plum-soft">
-        Drag and zoom so your face fills the circle. The closer we can see your
-        skin, the more your results will show.
+        {autoFramed
+          ? "We've centred this on your face — drag or zoom if you'd like to adjust it."
+          : "Drag and zoom so your face fills the circle. The closer we can see your skin, the more your results will show."}
       </p>
 
       <div

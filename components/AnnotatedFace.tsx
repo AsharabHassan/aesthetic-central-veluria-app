@@ -50,11 +50,13 @@ function MapLoader({ image }: { image: string }) {
   );
 }
 
-const SEVERITY_DOT: Record<FaceAnnotation["severity"], string> = {
-  low: "bg-[#5bb98b]",
-  moderate: "bg-[#6B9FA4]",
-  notable: "bg-[#e0556f]",
-};
+// The palette lives in lib/hero.ts, shared with the callout list and the reel.
+// This file used to carry its own — pink / TEAL / green against their red /
+// amber / green — so the same severity was a different colour depending on
+// which section of the page you were looking at, and teal for "moderate" read
+// as reassurance rather than as a middle severity. Red/amber/green also matches
+// what buildMapPrompt already tells the image model to draw.
+import { SEVERITY_DOT } from "@/lib/hero";
 
 const SEVERITY_LABEL: Record<FaceAnnotation["severity"], string> = {
   low: "Minor",
@@ -69,13 +71,14 @@ function clampPct(n: number) {
 
 export default function AnnotatedFace({
   image,
-  annotations,
+  concerns,
   mapImage = null,
   mapPending = false,
   onOpen,
 }: {
   image: string;
-  annotations: FaceAnnotation[];
+  /** THE canonical concern list — de-duplicated and numbered once. */
+  concerns: FaceAnnotation[];
   mapImage?: string | null;
   mapPending?: boolean;
   onOpen?: (src: string) => void;
@@ -107,7 +110,7 @@ export default function AnnotatedFace({
               className="w-full"
               draggable={false}
             />
-            {annotations.map((a, i) => {
+            {concerns.map((a, i) => {
               const isActive = active === i;
               return (
                 <button
@@ -131,7 +134,7 @@ export default function AnnotatedFace({
       </div>
 
       <ol className="space-y-2.5">
-        {annotations.map((a, i) => {
+        {concerns.map((a, i) => {
           const isActive = active === i;
           return (
             <li
