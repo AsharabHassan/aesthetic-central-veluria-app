@@ -54,6 +54,12 @@ export default function Home() {
    * be is the single most confusing thing this page can do.
    */
   const [previewFailed, setPreviewFailed] = useState(false);
+  /**
+   * How many generation checkpoints have landed, driving the wait's progress
+   * bar. Real events from the stream, so the bar cannot claim progress the work
+   * has not actually made.
+   */
+  const [previewStage, setPreviewStage] = useState(0);
   const [zoneImages, setZoneImages] = useState<Record<string, ZonePair>>({});
   // The zones we are GOING to generate, published as soon as the analysis lands
   // so the reel can reserve a card each — real header, real before panel — and
@@ -182,6 +188,8 @@ export default function Home() {
     setZoneTargets([]);
     setMapPending(true);
     setPreviewPending(true);
+    setPreviewFailed(false);
+    setPreviewStage(0);
 
     let analysisResult: SkinAnalysis;
     try {
@@ -287,10 +295,13 @@ export default function Home() {
             } catch {
               continue;
             }
-            if (msg.type === "partial" && msg.image) {
-              // Show it immediately. `previewPending` stays true so the reel
-              // still reads as working — this frame is not the answer yet.
-              setPreviewImage(msg.image);
+            if (msg.type === "partial") {
+              // A CHECKPOINT, NOT A PICTURE. The partial's image is deliberately
+              // discarded: these are the model's rough drafts, and showing a
+              // half-formed face reads as a botched retouch rather than as
+              // progress. What it is good for is telling the client, truthfully,
+              // that the work moved a step.
+              setPreviewStage((s) => s + 1);
             } else if (msg.type === "final" && msg.image) {
               final = msg.image;
             } else if (msg.type === "error") {
@@ -524,6 +535,7 @@ export default function Home() {
             previewImage={previewImage}
             previewPending={previewPending}
             previewFailed={previewFailed}
+            previewStage={previewStage}
             zoneTargets={zoneTargets}
             zoneImages={zoneImages}
             zonePending={zonePending}

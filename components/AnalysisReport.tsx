@@ -7,6 +7,7 @@ import AnnotatedFace from "./AnnotatedFace";
 import BeforeAfterSlider from "./BeforeAfterSlider";
 import AfterCallouts from "./AfterCallouts";
 import ConcernZooms from "./ConcernZooms";
+import PreviewProgress from "./PreviewProgress";
 import ScoreDestination from "./ScoreDestination";
 import VeluriaStack from "./VeluriaStack";
 import ReviewsSlider, { REVIEW_COUNT } from "./ReviewsSlider";
@@ -219,6 +220,7 @@ export default function AnalysisReport({
   previewImage,
   previewPending,
   previewFailed,
+  previewStage,
   zoneTargets,
   zoneImages,
   zonePending,
@@ -241,6 +243,8 @@ export default function AnalysisReport({
   previewPending?: boolean;
   /** The pass finished and produced nothing — show that, never a blank gap. */
   previewFailed?: boolean;
+  /** Generation checkpoints landed so far, driving the wait's progress bar. */
+  previewStage?: number;
   /**
    * The zones we are generating, published as soon as the analysis lands. The
    * reel reserves a card for each so nothing pops into the page mid-scroll.
@@ -515,15 +519,7 @@ export default function AnalysisReport({
             <div className="sheen-line rounded-[1.6rem]" />
           </div>
         ) : previewPending ? (
-          <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-[1.6rem] border border-white/70 bg-pearl-deep">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={before} alt="" aria-hidden="true" className="absolute inset-0 h-full w-full object-cover opacity-40 blur-sm" />
-            <div className="absolute inset-0 -translate-x-full animate-[shimmer_1.8s_ease-in-out_infinite] bg-gradient-to-r from-transparent via-white/50 to-transparent" />
-            <div className="relative flex flex-col items-center gap-3">
-              <span className="h-8 w-8 animate-[spin_1.6s_linear_infinite] rounded-full border-2 border-plum/20 border-t-plum" />
-              <p className="text-sm text-plum-soft">Building your preview…</p>
-            </div>
-          </div>
+          <PreviewProgress before={before} stage={previewStage ?? 0} />
         ) : previewFailed ? (
           /*
             NEVER AN EMPTY GAP. This branch was `null`, so when the full-face
