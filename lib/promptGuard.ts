@@ -111,6 +111,38 @@ export function inspectImagePrompt(v: unknown): PromptVerdict {
   return { ok: true, prompt: t };
 }
 
+/**
+ * The WHOLE-FACE brief, which is checked for claims but NOT for structure words.
+ *
+ * The structure list assumes any mention of bone structure, contour or jawline
+ * is a request to change one. That held while briefs described a tight zone crop
+ * and were told to write about the surface and nothing else. It is wrong for the
+ * whole-face brief, which is deliberately asked to END with an identity lock —
+ * "identical face, bone structure, eye colour, hairstyle…". Running the old
+ * check against it rejected Claude's brief on the very sentence that protects
+ * the client's likeness, and silently fell back to the template. Observed live:
+ *
+ *   [transform] brief: template (rejected: structure — "bone structure")
+ *
+ * The claim checks still apply in full: erasing a feature and lightening skin
+ * are refused here exactly as before, and those are the ones that matter.
+ */
+export function inspectAfterBrief(v: unknown): PromptVerdict {
+  if (typeof v !== "string") return { ok: false, reason: "not-a-string" };
+  const t = v.trim();
+  if (t.length < MIN_LENGTH) return { ok: false, reason: "too-short" };
+  if (t.length > MAX_LENGTH) return { ok: false, reason: "too-long" };
+
+  const erasure = UNSAFE_ERASURE.exec(t);
+  if (erasure) return { ok: false, reason: "unsafe", term: erasure[0].slice(0, 60) };
+  const absolute = UNSAFE_LIGHTENING_ABSOLUTE.exec(t);
+  if (absolute) return { ok: false, reason: "unsafe", term: absolute[0] };
+  const lightening = UNSAFE_LIGHTENING.exec(t);
+  if (lightening) return { ok: false, reason: "unsafe", term: lightening[0].slice(0, 60) };
+
+  return { ok: true, prompt: t };
+}
+
 /** Claude's photographic brief, or null when it cannot be trusted. */
 export function parseImagePrompt(v: unknown): string | null {
   const verdict = inspectImagePrompt(v);

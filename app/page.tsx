@@ -8,17 +8,19 @@ import AnalysisReport from "@/components/AnalysisReport";
 import type { SkinAnalysis, LeadPayload } from "@/lib/types";
 import type { GhlMeta } from "@/lib/ghl";
 import { concernZones, heroZone, type HeroZone } from "@/lib/hero";
+import { cropRegion, loadImage, toSquare } from "@/lib/canvas";
+import { zoneWindowFor } from "@/lib/zoneCrop";
 import { DISCLAIMER_SHORT } from "@/lib/legal";
 
 type Step = "welcome" | "capture" | "form" | "processing" | "result" | "error";
 
 /**
- * How many areas get their own generated close-up.
+ * How many areas get a close-up in the reel.
  *
- * Each is a separate ~60s generation billed on its own, so this is a real cost
- * lever. Three is chosen over "all of them": the reel is ordered worst-first,
- * so three covers the concerns the client actually came in with, and a page of
- * three unmistakable changes converts better than seven faint ones.
+ * No longer a cost lever: close-ups are now cut from the one generated after
+ * image, so a fourth costs a canvas crop rather than a billed generation. It is
+ * purely an editorial choice — the reel is ordered worst-first, and three
+ * unmistakable changes read better than seven faint ones.
  */
 const ZONE_LIMIT = Number(process.env.NEXT_PUBLIC_ZONE_LIMIT ?? 3);
 
@@ -38,9 +40,9 @@ export default function Home() {
   const [analysis, setAnalysis] = useState<SkinAnalysis | null>(null);
   const [mapImage, setMapImage] = useState<string | null>(null);
   const [mapPending, setMapPending] = useState(false);
-  // The full-face "after" for the slider — the generated close-ups composited
-  // back onto this photo, plus the deterministic skin grade as a guaranteed
-  // floor. Deliberately NOT one full-face generation: see lib/compose.ts.
+  // The full-face "after" for the slider — ONE gpt-image-2 edit of this photo,
+  // briefed by Claude from the analysis. Every close-up in the reel is cut from
+  // this same image, so the two can never disagree. See app/api/transform.
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [previewPending, setPreviewPending] = useState(false);
   /**
@@ -85,41 +87,6 @@ export default function Home() {
     setStep("welcome");
   };
 
-  /**
-   * The per-area close-ups, each generated on its own tight crop.
-   *
-   * Keyed by area|concern so a zone's pair can be looked up without depending
-   * on list order. See app/api/zone/route.ts for why these are generated
-   * separately instead of being cropped out of the full-face image.
-   */
-  const fetchZone = (image: string, zone: HeroZone) =>
-    fetch("/api/zone", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        image,
-        zone: {
-          area: zone.area,
-          concern: zone.concern,
-          x: zone.x,
-          y: zone.y,
-          // Written by Claude during the analysis, from the actual photograph.
-          imagePrompt: zone.imagePrompt,
-        },
-      }),
-    })
-      .then(async (r) => {
-        const d = await r.json().catch(() => ({}));
-        return r.ok && d.before && d.after
-          ? {
-              before: d.before as string,
-              after: d.after as string,
-              // Carried so the close-up can be pasted back onto the whole face.
-              box: d.box as ZonePair["box"],
-            }
-          : null;
-      })
-      .catch(() => null);
 
   // Build the branded PDF (analysis + before/after + treatment map) in the browser
   // and hand it to /api/report, which uploads it to GoHighLevel, attaches it to the
@@ -223,87 +190,80 @@ export default function Home() {
         severity: a.severity,
       })) ?? [];
 
-    // THE CLOSE-UPS ARE NOW THE WHOLE PREVIEW.
+    // ONE WHOLE-FACE GENERATION IS THE RESULT. The close-ups are cut from it.
     //
-    // There used to be a full-face generation here as well, shown in a
-    // before/after slider. It is gone, and the measurements are the reason.
-    // `images.edit` re-renders the entire frame, so at full-face scale any one
-    // area is a few hundred pixels and the model treats it as texture rather
-    // than structure: the jaw region moved a mean absolute 11.1 / 11.5 / 10.5
-    // across three prompt variants and came back visually identical every time.
-    // On a dark real-world photo the whole-frame change fell to ~4.5, most of
-    // which was background. The SAME region, cropped out and generated on its
-    // own at a full 1024px, moved 29.7 and came back genuinely changed.
+    // This replaces a pipeline that generated 2-3 tight zone crops and pasted
+    // them back onto the client's photograph. That pipeline did what it was
+    // designed to do and still failed the client: a zone is ~15% of the frame,
+    // so a strong zone edit scoring 16-23 produced a whole-face change of about
+    // 2, and clients said their face looked the same. They were right.
     //
-    // The variable was never the wording — six prompt rewrites in this repo's
-    // history say so. It is how many pixels the region gets.
+    // Cutting the close-ups OUT of the generated after, rather than generating
+    // them separately, has a property the old shape could not offer at any
+    // price: the reel and the slider are now the same photograph, so a client
+    // who compares them can never find them disagreeing. It is also one billed
+    // image instead of nine.
     const zoneTargets = concernZones(
       analysisResult.annotations,
       analysisResult.categories,
     ).slice(0, ZONE_LIMIT);
-    // Published so the reel can reserve a card per zone immediately, header and
-    // real BEFORE panel and all, instead of popping cards in as results land.
+    // Published immediately so the reel can reserve a card per zone — header and
+    // real BEFORE panel and all — instead of popping cards in as results land.
     setZoneTargets(zoneTargets);
     setZonePending(zoneTargets.length > 0);
 
-    const zonesSettled = Promise.all(
-      zoneTargets.map((z) =>
-        fetchZone(image, z).then((pair) => {
-          // Land each one as it arrives rather than waiting for the slowest, so
-          // the reel fills in progressively instead of appearing all at once.
-          if (pair) {
-            setZoneImages((prev) => ({ ...prev, [`${z.area}|${z.concern}`]: pair }));
-          }
-          return pair ? { zone: z, pair } : null;
-        }),
-      ),
-    ).then((rs) => rs.filter((r): r is NonNullable<typeof r> => r !== null));
-    void zonesSettled.finally(() => setZonePending(false));
-
-    // THE FULL-FACE "AFTER", ASSEMBLED FROM THE CLOSE-UPS.
-    //
-    // Not generated. A single full-face pass measurably changes nothing — the
-    // jaw moved ~11 across three prompt variants and looked identical every
-    // time — which is why the slider was removed twice. The close-ups DO work:
-    // each is generated on its own 1024px crop and scores 16-23. So the
-    // whole-face result is those close-ups pasted back onto the client's own
-    // photograph, masked to the skin of the face by the landmark service.
-    //
-    // Two properties follow, and they are the ones the generated version could
-    // never deliver: the base is their own pixels so it overlays exactly, and
-    // the change lands precisely on the areas the analysis flagged rather than
-    // being smeared evenly over a whole face.
-    //
-    // IT RUNS EVEN WITH ZERO PATCHES, which is the fix for the owner seeing no
-    // slider at all. It used to bail here when every zone had been rejected, and
-    // since the composite was the ONLY thing producing a full-face after, one
-    // unlucky run of a lottery (the same crop measures 21.7, 17.6 and 10.5 on
-    // identical input) left the page with nothing to compare. /api/compose now
-    // grades the face itself as a guaranteed floor, so it always has an answer.
-    void zonesSettled
-      .then(async (pairs) => {
-        const patches = pairs
-          .filter((p) => p.pair.box)
-          .map((p) => ({ ...p.pair.box!, image: p.pair.after }));
-        const r = await fetch("/api/compose", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            image,
-            patches,
-            // Only when a laxity concern was actually matched to Ultra Lift. A
-            // client with no laxity must not be shown a firmness result from a
-            // product nobody recommended them.
-            lift: zoneTargets.some((z) => z.product?.id === "ultra-lift"),
-          }),
-        });
-        return r.ok ? ((await r.json()).image as string) : null;
-      })
+    const previewSettled = fetch("/api/transform", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        image,
+        // Claude's own brief, written from this photograph during the analysis.
+        afterImagePrompt: analysisResult.afterImagePrompt,
+        concerns: zoneTargets.map((z) => ({ area: z.area, concern: z.concern })),
+        hero: heroArea ? { area: heroArea.area, concern: heroArea.concern } : null,
+      }),
+    })
+      .then(async (r) => (r.ok ? ((await r.json()).image as string) : null))
       .catch(() => null)
-      .then((img) => {
-        if (img) setPreviewImage(img);
-        else setPreviewFailed(true);
+      .then(async (after): Promise<{ zone: HeroZone; pair: ZonePair }[]> => {
+        if (!after) {
+          setPreviewFailed(true);
+          setPreviewPending(false);
+          setZonePending(false);
+          return [];
+        }
+        setPreviewImage(after);
         setPreviewPending(false);
+
+        // The reel: the same window cut from BOTH frames, so the two panels are
+        // guaranteed to be the same piece of face — the one thing a side-by-side
+        // comparison cannot get wrong.
+        try {
+          const [beforeImg, afterImg] = await Promise.all([
+            loadImage(image),
+            loadImage(after),
+          ]);
+          const beforeSq = toSquare(beforeImg, 1024);
+          const afterSq = toSquare(afterImg, 1024);
+          const pairs: Record<string, ZonePair> = {};
+          const list: { zone: HeroZone; pair: ZonePair }[] = [];
+          for (const z of zoneTargets) {
+            const side = zoneWindowFor(z.area, z.concern);
+            const pair: ZonePair = {
+              before: cropRegion(beforeSq, z.x, z.y, side, 1024).toDataURL("image/jpeg", 0.92),
+              after: cropRegion(afterSq, z.x, z.y, side, 1024).toDataURL("image/jpeg", 0.92),
+            };
+            pairs[`${z.area}|${z.concern}`] = pair;
+            list.push({ zone: z, pair });
+          }
+          setZoneImages(pairs);
+          return list;
+        } catch {
+          // A canvas failure costs the reel, never the slider.
+          return [];
+        } finally {
+          setZonePending(false);
+        }
       });
 
     const mapPromise = fetch("/api/map", {
@@ -326,11 +286,11 @@ export default function Home() {
     // branded PDF and deliver it to GHL — so the emailed report matches what the
     // client sees on screen. Fire-and-forget; a missing image just drops out.
     //
-    // Waits on the ZONES now, not on a full-face pass: they are the proof, so an
-    // email that went out before they existed would carry a report with no
-    // evidence in it.
+    // Waits on the generated after, which is now the source of both the slider
+    // and every close-up — an email sent before it existed would carry a report
+    // with no evidence in it.
     if (activeLead) {
-      Promise.all([zonesSettled, mapPromise]).then(([zonePairs, mapImg]) =>
+      Promise.all([previewSettled, mapPromise]).then(([zonePairs, mapImg]) =>
         sendReport(activeLead, analysisResult, image, zonePairs, mapImg),
       );
     }

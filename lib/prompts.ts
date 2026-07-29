@@ -68,18 +68,18 @@ Then write:
         * Concern WITHIN the Veluria range: NAME THE MATCHING PRODUCT and say what it can realistically improve there. Pigmentation, uneven tone, sun spots, dullness → Veluria Pearl Tone. Laxity, firmness, jawline definition, forehead lines, frown lines, crow's feet → Veluria Ultra Lift. Texture, pores, hydration, glow, fine surface lines, post-acne marks, irritated-looking redness → Veluria Silk Skin. Example: "A course of Veluria Pearl Tone can visibly soften and even these sun spots and brighten the overall tone." Never guarantee outcomes.
         * Concern genuinely OUTSIDE the range (active acne, visible capillaries/thread veins, deep folds or volume loss, moles or lesions, ice-pick scarring): the sentence MUST start with exactly "Beyond Veluria's scope — " followed by a short note that the clinician can advise at the consultation. Do NOT name any other product or treatment. Example: "Beyond Veluria's scope — the clinician can advise on this at your consultation."
     - severity: "low", "moderate", or "notable".
-    - imagePrompt: THE PHOTOGRAPHIC BRIEF for this area's simulated "after" close-up. You are writing instructions for an image model that will edit a tight crop of THIS person's own photo, and you are the only one who has actually seen them — so describe what you can see, not what a textbook says.
+- afterImagePrompt: THE PHOTOGRAPHIC BRIEF for this person's simulated "after" PHOTOGRAPH — one brief for the whole face, not one per area. An image model will edit THIS person's own photo with it, and you are the only thing in the pipeline that has actually looked at them.
 
-      WRITE ABOUT THE SURFACE OF THE SKIN AND NOTHING ELSE. This is the single most important rule and it is not about caution, it is about what works. An image model can render texture, tone, line depth, clarity and sheen. It cannot render structure. Asking it for skin that is "rebuilt", "denser", "firmer", "lifted", "plumped from beneath", or for a jaw that "sits higher", measurably makes the result WORSE — it produces a picture where nothing at all has changed. Describe only: how smooth or refined the surface is, how deep the lines are, how even and clear the tone is, how bright or shadowed the area reads, and how the light sits on it.
+  LEAD WITH THE RESULT. THEN LOCK IDENTITY ONCE, AT THE END. This ordering is the whole job. A brief that opens with everything that must not change, and repeats it, produces a photograph in which nothing changed — that failure has already shipped to real clients from this system. Say plainly what the after photograph SHOWS, then close by saying it is the same person.
 
-      Write it as a photographer briefing a retoucher on a real clinical photograph. KEEP IT UNDER 70 WORDS — you are writing several of these in one reply and a long one costs the whole response. Structure it as:
-      1. One line naming the shot: a clinical close-up of this person's <area>, twelve weeks into a course of medical microneedling.
-      2. Three or four short bullets describing the improved SURFACE, each specific to what you can actually see in this photo — the direction the crepiness runs, where the light catches, the particular shade and undertone of their skin, whether the lines are fine and crosshatched or few and deep.
-      3. One closing line locking what must not change: same person, same face, same expression, same head position, same crop, same lighting, same skin colour and depth; every mole, freckle, raised spot and blood vessel exactly where it is; real skin texture, never airbrushed or plastic.
+  Structure it as:
+  1. One line: a photograph of this same woman (or man) twelve weeks into a course of professional skin treatment.
+  2. Four to six short bullets, each naming an area you flagged above and what has visibly improved there — the crow's feet markedly shallower, the crepey texture under the eyes smooth, the nasolabial folds softer, the forehead lines reduced, tone even, pores refined, skin hydrated with a natural light on it. Be specific to THIS face: which way the lines run, where the light falls, their undertone, whether lines are fine and crosshatched or few and deep.
+  3. One closing paragraph locking identity: this is the same photograph of the same person — identical face, bone structure, eye colour, hairstyle, eyebrows, clothing, pose, expression, camera angle, background and lighting; the same age with the same features; keep their moles and freckles; real photographic skin with visible pores and fine detail, a clinical after-photograph, never airbrushed, plastic or blurred.
 
-      NEVER write into imagePrompt: anything about volume, filling, lifting, tightening, contour, bone structure, face shape, slimming, or age. Never ask for a spot, mole, freckle, scar or blood vessel to be removed or faded — only FLAT marks may read fainter. Never ask for skin to be made lighter, paler or whiter; "brighter" means it reflects more light, never that the colour changes.
+  Describe only what Veluria treats — surface: line depth, texture, tone, clarity, hydration, how the light sits. Do not ask for volume, filler, lifting, tightening, contour or bone structure; those are not renderable and asking for them measurably makes the result worse. Never ask for a mole, freckle, scar or blood vessel to be removed. Never ask for skin to be made lighter, paler or whiter — "brighter" means it reflects more light, never that the colour changes.
 
-      If this concern is one Veluria cannot treat, set imagePrompt to an empty string "" — an area we do not treat must never acquire a picture implying we did.
+  Aim for 150-250 words. This is the single most important field in your reply.
 - veluriaRecommendation: 2-3 sentences setting out THIS person's Veluria plan. Name the specific product(s) their concerns call for and why (e.g. "Pearl Tone to even the sun damage across your cheeks, alongside Silk Skin to refine texture"). Be specific to what you actually observed. If some of their concerns genuinely sit outside the range, acknowledge that honestly in one clause and note the clinician will advise at the consultation. Warm and encouraging, never guaranteeing results. End with a gentle invitation to book a consultation.
 
 Rules:
@@ -96,8 +96,9 @@ Rules:
     {"label":"Firmness & elasticity","score":number,"note":string}
   ],
   "annotations": [
-    {"x":number,"y":number,"area":string,"concern":string,"treatment":string,"severity":"low"|"moderate"|"notable","imagePrompt":string}
+    {"x":number,"y":number,"area":string,"concern":string,"treatment":string,"severity":"low"|"moderate"|"notable"}
   ],
+  "afterImagePrompt": string,
   "veluriaRecommendation": string,
   "disclaimer": "This is a cosmetic, non-diagnostic assessment of visible skin appearance only and is not medical advice."
 }
@@ -210,51 +211,28 @@ function targetedAfterAction(
 }
 
 /**
- * Builds the gpt-image-2 prompt for the AFTER image.
+ * The whole-face "after" brief, used when Claude's own is missing or refused.
  *
- * Edits the user's real selfie (the FIRST image) and returns the SAME person,
- * same pose/crop/framing/lighting, with only skin QUALITY improved. The app
- * keeps the untouched selfie as the "before", so the before is never altered.
+ * RESULT FIRST, LOCKS ONCE AT THE END. The version this replaces ran to over a
+ * thousand words and was overwhelmingly prohibition — count them, copy them
+ * across, never fill, never lighten, this is a FAILURE if — with the demand for
+ * change buried in the middle. It produced photographs in which nothing had
+ * changed, and the conclusion drawn at the time was that the model could not do
+ * it. That conclusion was wrong. Measured on the same face, same model, same
+ * endpoint, only the prompt and quality differing:
  *
- * Shape matters as much as content, and every structural choice here is
- * load-bearing:
+ *   locked prompt, quality low/medium   jaw moved ~11, "looked identical"
+ *   result-first prompt, quality high   MAD 19.8, unmistakable, identity held
  *
- *  - ONE AREA LEADS. The prompt used to ask for improvement everywhere at once
- *    and got it: a uniform shift across the whole face, which is the hardest
- *    kind of change for a person to see, because the eye compares locally
- *    against a reference and is close to blind to a global one. Clients read
- *    "everything moved a little" as "nothing happened". The hero zone (see
- *    lib/hero.ts) now gets the largest change in the image and is cropped out
- *    at 2x next to the same crop of the original, which is the comparison the
- *    full-face slider never makes.
- *
- *  - IMPROVEMENT OUTWEIGHS RESTRICTION. It did not use to. The prompt carried
- *    four separate preservation sections, a shouted tone lock in the opening
- *    slot and a closing tone check, against six improvement bullets — roughly
- *    70% of the text was telling the model what NOT to do. gpt-image-2 is
- *    already biased toward handing its input back unchanged, so a restriction
- *    majority is a thumb on the scale for "return the photo". Preservation is
- *    now stated ONCE, positively, as a copy-across checklist.
- *
- *  - THE TONE LOCK MOVED, IT DID NOT WEAKEN. It is enforced in code by
- *    lockSkinTone (lib/glow.ts), which is multiplicatively clamped at parity
- *    and structurally incapable of lightening anyone's skin. Repeating it three
- *    times in the prompt bought nothing the code does not already guarantee and
- *    cost the improvement its share of the model's attention. The freckle rule
- *    stays prominent, because that one the code genuinely cannot enforce.
- *
- *  - THE LAST WORD IS THE DEMAND. The prompt ends on "make the change obvious",
- *    never on a constraint. An earlier version closed on the tone check and the
- *    model took the final instruction as licence to hold back.
- *
- * Both properties are verified together: the change must be obvious AND
- * redness, pigmentation, blemishes, scars, vessels and facial volume must
- * survive the edit intact.
+ * The model was never the constraint. The prompt was spending its attention on
+ * things the code already guarantees, and the last word it heard was a
+ * restriction. So: say what the photograph shows, name the areas, and lock
+ * identity once, at the end, in one paragraph.
  */
 export function buildAfterImagePrompt(
   concerns: ConcernArea[],
-  hasReferences: boolean,
-  annotate = false,
+  _hasReferences = false,
+  _annotate = false,
   hero: HeroFocus | null = null,
 ): string {
   const list: ConcernArea[] =
@@ -266,87 +244,25 @@ export function buildAfterImagePrompt(
           { area: "Fine surface lines", concern: "early fine lines and crepiness" },
         ];
 
-  // The hero gets its own leading section, so it is dropped from the secondary
-  // list rather than stated twice — repeating it there would flatten it back
-  // into "one of six", which is exactly the levelling this change undoes.
-  const secondary = hero
-    ? list.filter((c) => !(c.area === hero.area && c.concern === hero.concern))
+  // The headline concern leads, and is not repeated in the list below — stating
+  // it twice flattens it back into "one of six", which is the levelling this
+  // ordering exists to undo.
+  const rest = hero
+    ? list.filter((c) => c.area.toLowerCase() !== hero.area.toLowerCase())
     : list;
 
-  const heroBlock = hero
-    ? `THE ONE CHANGE THAT MATTERS MOST — ${hero.area.toUpperCase()} (${hero.concern}).
-This is the headline of the image and the FIRST thing anyone must notice. ${targetedAfterAction(hero.area, hero.concern, false)}.
-Make this the LARGEST change in the picture. It has to survive being cropped: if someone cuts a tight square around just this part of the face and holds it beside the same square from the original, the difference must be unmistakable on its own, with no other part of the face visible to help. Everything else on the face improves too, but more quietly, so nothing competes with this.
+  const bullets = [
+    ...(hero ? [`- the ${hero.concern} at the ${hero.area} is markedly improved and this is the first thing a viewer notices`] : []),
+    ...rest.map((c) => `- ${c.area.toLowerCase()}: ${skinAction(c.area, c.concern)}`),
+    "- the skin overall is even in tone, hydrated and healthy, with a natural light sitting on it",
+  ].join("\n");
 
-`
-    : "";
+  return `A photograph of this same person twelve weeks into a course of professional skin treatment at Aesthetics Central Clinic.
 
-  const focus = secondary
-    .map((c) => `- ${c.area} (${c.concern}): ${targetedAfterAction(c.area, c.concern, false)}`)
-    .join("\n");
+Their skin is the only thing that has changed, and the change is clearly visible:
+${bullets}
 
-  // When annotate is set, the SAME image also carries the treatment-map
-  // pointers, so one generation serves both the slider and the map container.
-  const pointerBlock = annotate
-    ? `\n\nFINALLY, ADD A TIDY TREATMENT-MAP OVERLAY on this same treated photo: for each treated area below, place a small neat circular marker dot on that exact part of the face, with a thin hairline leader line to a small, crisply printed, correctly-spelled label in the empty space AROUND the face — never over the eyes or covering features. Each label is just the area name. Keep it minimal, elegant and perfectly legible, like a premium Aesthetics Central Clinic treatment diagram in soft gold and charcoal — no clutter, no legend. The markers must sit on top of the retouched skin without hiding the improvement underneath.\nTREATED AREAS TO MARK:\n${list.map((c) => `- ${c.area}`).join("\n")}`
-    : "";
-
-  const referenceLine = hasReferences
-    ? `\n\nREFERENCE IMAGES: any image AFTER the first shows REAL skin following aesthetic treatment — match that realistic treated-skin texture, tone and glow. Do NOT copy the reference people's identity or features in any way.`
-    : "";
-
-  // The plan drives the image: only the products this client actually needs get
-  // to change their skin. Someone with no pigment concern must not get Pearl
-  // Tone's tone-evening applied to them.
-  const plan = planFor(list);
-  const planBlock = plan
-    .map((p) => `- ${p.name} (${p.actives}) — over ${p.sessions} sessions: ${p.visibleResult}.`)
-    .join("\n");
-
-  // The lift bullet is emitted ONLY when this client's plan actually contains
-  // Ultra Lift. Same rule as the plan block above: a client with no laxity
-  // concern must not be shown a firmness result from a product nobody
-  // recommended them. It leads the list because "firmer" is the change the
-  // model is most inclined to skip, and the first bullet carries the most weight.
-  // No silhouette instructions here either — see targetedAfterAction's
-  // allowContour. This block used to demand the skin "SITS HIGHER on the face"
-  // and the jaw margin be redrawn "as one clean, continuous, well-defined
-  // line", which is a request to move the outline of a face that has to overlay
-  // the original inside a slider. The firmness claim survives intact; it is now
-  // carried by density, crease depth and surface, which the model can deliver
-  // without repainting where the face ends.
-  const liftBlock = plan.some((p) => p.id === "ultra-lift")
-    ? `- FIRM AND REBUILT — THIS IS THE HEADLINE CHANGE, AND IT MUST BE OBVIOUS AT A GLANCE. The skin is denser, tighter and springier, and reads taut and well-supported rather than soft and tired. Slack skin across the cheeks is firm. The creases and shadows that slack skin falls into — along the lower cheek and under the jaw — are visibly shallower and less heavy. Expression lines on the forehead, between the brows and at the eyes are markedly SHALLOWER and softer — softened, never erased, never smoothed into a blank waxy plane, and the person keeps their expression. The face must look genuinely FIRMER, not merely more moisturised. THE OUTLINE OF THE FACE DOES NOT MOVE: the silhouette, jaw edge, chin, neckline and head position stay in exactly the same place, the face is never reshaped, slimmed or narrowed, the bone structure never changes, and no filler-style volume is added anywhere.\n`
-    : "";
-
-  return `Photorealistic clinical follow-up photograph of the SAME person in the first image, taken twelve weeks after their course of Veluria treatments (PB Serum's microneedled bioremodeling range, built on recombinant collagenase) at Aesthetics Central Clinic.
-
-THE CAMERA DID NOT MOVE. This is the same person photographed from the identical position on a tripod: same head size in the frame, same head position, same head angle, same crop, same framing, same background in the same place, same lighting direction. Every feature — the eyes, nose, mouth, hairline, the outline of the face and the line of the shoulders — stays at exactly the same pixel coordinates as the original. ONLY THE SKIN CHANGES. This result is shown side by side with the original and the two must overlay each other perfectly; if the head has moved, changed size, or the background has shifted, the photograph has failed no matter how good the skin looks.
-
-${heroBlock}THE PLAN THIS PERSON HAD, AND WHAT EACH PRODUCT DID TO THEIR SKIN:
-${planBlock}
-
-RENDER THE SKIN IN ITS TREATED STATE. Do not simply reproduce the skin from the original photo. The result of that plan, which must be obvious at a glance:
-${liftBlock}- REBUILT AND PLUMPED: collagen is regenerated, so the skin is denser, firmer and springier — it sits better on the face and looks genuinely healthier rather than merely moisturised. Fine surface lines and crepey texture are filled out from beneath and are markedly shallower.
-- SATURATED AND DEWY: plump, water-filled, bouncy "glass skin", and it returns the light in soft, luminous, slightly wet-looking highlights along the cheekbones, brow bones, nose bridge, chin and cupid's bow. THIS SHEEN MUST BE CLEARLY, OBVIOUSLY PRESENT — a healthy dewy glow, never greasy, sweaty or oily, and never flat, thirsty or papery.
-- SILK TEXTURE: the surface is resurfaced smooth, even and refined. Dryness, flakiness, roughness and crepiness are gone. Pores stay visible but read tight and clean.
-- RESTED: the skin under the eyes is rebuilt — thicker, firmer, smoother and far less crepey — so the area reads visibly brighter, less shadowed and awake, and any pigment stain there is softened. The SOCKET IS NOT FILLED: if there is a true hollow from lost volume, its shape and depth are exactly as in the original. No filler-style plumping of the tear trough, and no puffiness added.
-
-${hero ? "IMPROVE THESE TOO, MORE QUIETLY THAN THE HEADLINE AREA ABOVE:" : "CONCENTRATE THE IMPROVEMENT HERE:"}
-${focus}
-
-COPY THESE ACROSS EXACTLY FROM THE ORIGINAL — same position, same size, same shape, same colour — and let the improved skin appear around and between them:
-- EVERY SPOT THAT IS RAISED, RED OR INFLAMED. This is the hard line and it matters most of all. A blemish that stands proud of the skin, or is red, angry or inflamed, is ACTIVE acne: Veluria works on the flat marks acne leaves behind, not on active acne. COUNT THEM — every single raised or red spot in the original is still there in the result, same size, same redness, same position. Removing even one is a FAILED image. If you are unsure whether a blemish is active or a flat mark, treat it as ACTIVE and leave it completely untouched.
-- Every visible blood vessel, thread vein and broken capillary — vascular, and Veluria does not remove them.
-- Every mole, skin tag, beauty spot and FRECKLE. Freckles are part of who this person is, not a flaw: same position, same size, same depth of colour, never faded, never blurred, never removed.
-- FACIAL VOLUME. Every deep static fold, every hollow and every loss of volume keeps its original shape, position and depth. Firmer skin makes a fold read a little softer and firmer under-eye skin makes the area read less shadowed — but nothing is ever FILLED IN. Veluria is not a filler: no plumping of the tear trough, no filling of the nasolabial or marionette folds, no added volume anywhere.
-- The person's identity, face shape, bone structure, ethnicity, apparent age, hair, beard, expression, head angle, crop, framing, background, and the direction and colour of the lighting. The result must overlay the original 1:1.
-- THEIR SKIN COLOUR. Sample it from the original and paint the result in that same colour: same depth, same melanin, same undertone. Deep skin stays exactly as deep, brown stays brown, olive stays olive. "Radiance", "brightening" and "glow" above mean ONE thing — the skin REFLECTS MORE LIGHT because it is healthier and better hydrated. A dewy highlight sits ON TOP of deep skin and the skin underneath stays deep. This is never lightening, bleaching, whitening or a brightness filter.
-- Real pores and true skin micro-texture. Never airbrushed, plastic, waxy or blurred. No make-up, no reshaping or slimming of the face.
-
-WHAT MAY CHANGE, precisely: a FLAT mark lying level with the skin — an old post-acne mark, a sun spot, an age spot — may become fainter and less contrasted, still in exactly the same place, simply less obvious. A LINE OR CREASE may become clearly shallower and softer, still in exactly the same place, with the face keeping its expression and the skin around it never flattened into a blank waxy plane. A RAISED, RED or INFLAMED spot may not change at all, ever.
-
-Both truths at once: the things Veluria cannot treat are still plainly there, and the skin carrying them is unmistakably firmer, tighter, clearer, more even and more radiant. Side by side with the original — and especially in a tight crop of the headline area — a viewer must instantly say "their skin looks incredible". If the skin has barely changed, the image is a FAILURE. If the ONLY change is that the skin looks wetter and more moisturised, while it still hangs exactly as it did and every line is still cut exactly as deep, that is ALSO a failure. The skin must look genuinely REBUILT, not merely hydrated.${pointerBlock}${referenceLine}`;
+This is the same photograph of the same person: identical face, bone structure, eye colour, hairstyle, eyebrows, clothing, pose, expression, camera angle, background and lighting. They are the same age with the same features. Keep every mole and freckle exactly where it is, and leave any raised or inflamed spot, thread vein and broken capillary untouched — those are not what this treatment works on. Their skin colour is unchanged: same depth, same melanin, same undertone, with the healthier skin simply returning more light. Real photographic skin with visible pores and fine detail — a clinical after-photograph, never airbrushed, plastic or blurred.`;
 }
 
 /**

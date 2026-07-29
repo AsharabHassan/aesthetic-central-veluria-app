@@ -55,6 +55,14 @@ export interface SkinAnalysis {
   categories: AnalysisCategory[];
   /** Pinned points on the face marking areas to address */
   annotations: FaceAnnotation[];
+  /**
+   * Claude's photographic brief for the whole-face "after", written from the
+   * client's actual photo. ONE brief for the face, not one per area: the
+   * per-area briefs it replaced fed a pipeline that generated small crops and
+   * pasted them back, which changed ~15% of the frame and left clients saying
+   * their face looked the same. See app/api/transform/route.ts.
+   */
+  afterImagePrompt?: string;
   veluriaRecommendation: string;
   /** Always present, non-medical disclaimer */
   disclaimer: string;
