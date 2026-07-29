@@ -28,14 +28,30 @@ import type { HeroFocus } from "@/lib/hero";
  *   result-first prompt, HIGH    MAD 19.8 across the whole face, identity held
  *   result-first prompt, medium  MAD 15.6, but eyebrows and framing drifted
  *
- * NOW MEDIUM, because ~200s is a wait most people will not sit through and the
- * drift turned out to be a prompt problem rather than a quality-tier one. The
- * brief's closing lock is now explicit about the parts that actually move —
- * eyebrow shape and thickness, hairline, camera distance and crop, head size
- * and position in the frame — rather than the generic "same person" it said
- * when medium was first measured. Medium runs in ~60s against high's ~200s.
+ * IT WENT TO MEDIUM FOR THE WAIT, AND CAME BACK. Medium fixed the ~200s wait
+ * and did hold identity once the closing lock named the parts that actually
+ * drift — eyebrow shape and thickness, hairline, camera distance and crop, head
+ * size and position in the frame. But the owner reported the before and after
+ * had stopped looking different, and he was right. Same photograph, same
+ * prompts, same day, only the tier changing:
  *
- * Set AFTER_QUALITY=high to trade the wait back for the last of the fidelity.
+ *              no preserve clause    with preserve clause
+ *   medium      MAD 11.3  (57s)       MAD 15.5  (64s)
+ *   high        MAD 24.9 (193s)       MAD 19.4 (181s)
+ *
+ * Medium does roughly half the work. The preserve clause was the first suspect
+ * — it ends the prompt on prohibitions, which is exactly the shape that
+ * produced no change in this repo's history — and it was measured and cleared:
+ * it does not suppress the result.
+ *
+ * Turning up the deterministic grade to compensate was also measured and also
+ * failed, in the wrong direction: see the note at the hydrationGrade call.
+ *
+ * So the tier IS the difference, and there is no free version of it. High, and
+ * the wait is honest — the loader tells the client it takes around three
+ * minutes, and the analysis now runs while they fill in the form.
+ *
+ * Set AFTER_QUALITY=medium to trade the difference back for ~130 seconds.
  *
  * THE GATE IS INVERTED, AND THAT IS THE POINT. The old pipeline's floor
  * rejected images that changed TOO LITTLE, which is the failure mode of an
@@ -51,7 +67,7 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const SIZE = 1024;
-const QUALITY = (process.env.AFTER_QUALITY as "low" | "medium" | "high") ?? "medium";
+const QUALITY = (process.env.AFTER_QUALITY as "low" | "medium" | "high") ?? "high";
 const VERIFY_MODEL = "claude-sonnet-5";
 /**
  * How many progressive renders to stream before the final image.
@@ -384,6 +400,14 @@ export async function POST(req: Request) {
         // whatever the prompt said. `hydrationGrade` applies it FIRST, against
         // raw output. Glow stays at its env default — the generation is doing
         // the work now, so this is a finishing pass, not the source of change.
+        // Firmness stays OFF, and turning it on was measured rather than
+        // assumed. At GLOW_STRENGTH=3 / FIRMNESS_STRENGTH=2 the whole-face
+        // change went DOWN, not up — 11.3 to 10.2 without the preserve clause
+        // and 15.5 to 7.6 with it. The grade's tone lock pulls luminance back
+        // toward the client's own photograph by design, so leaning on it works
+        // against the very difference we are trying to produce. lib/glow.ts
+        // says as much about itself: it is a finishing pass, not a source of
+        // change. The generation is the source.
         const graded = await hydrationGrade(
           Buffer.from(b64, "base64"),
           glowStrengthFromEnv(),
