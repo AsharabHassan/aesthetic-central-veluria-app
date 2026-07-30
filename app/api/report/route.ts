@@ -4,14 +4,19 @@ export const runtime = "nodejs";
 
 const CLINIC_NAME = "Aesthetics Central Clinic";
 const CLINIC_BYLINE = "Luton";
-// The report email's "Book your consultation" link points at the same free
-// online consultation calendar as the in-app CTA (falls back to the website).
+// The report email's "Book your consultation" link. Deliberately NOT the
+// in-app NEXT_PUBLIC_CALENDAR_URL: the email points at the clinic's own
+// white-label booking domain rather than the raw leadconnectorhq widget.
 const BOOKING_URL =
-  process.env.NEXT_PUBLIC_CALENDAR_URL ??
-  process.env.NEXT_PUBLIC_BOOKING_URL ??
-  "https://aestheticscentral.co.uk/";
+  process.env.GHL_BOOKING_URL ??
+  "https://link.aestheticscentral.co.uk/widget/bookings/free-veluria-online-consultation";
 const WEBSITE_URL =
   process.env.NEXT_PUBLIC_SITE_URL ?? "https://aestheticscentral.co.uk/";
+// Sender identity for the report email. The address must be a verified sender
+// or domain in the GHL sub-account, otherwise GHL rejects the send.
+const EMAIL_FROM = process.env.GHL_EMAIL_FROM ?? "hello@aestheticscentral.co.uk";
+const EMAIL_FROM_NAME = process.env.GHL_EMAIL_FROM_NAME ?? "Aesthetics Central";
+const EMAIL_FROM_HEADER = `${EMAIL_FROM_NAME} <${EMAIL_FROM}>`;
 
 interface ReportRequest {
   lead?: {
@@ -72,6 +77,7 @@ export async function POST(request: Request): Promise<Response> {
     subject,
     emailHtml,
     noteBody,
+    emailFrom: EMAIL_FROM_HEADER,
   });
 
   // Surface failures in the server log without leaking the PDF.

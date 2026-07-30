@@ -27,6 +27,9 @@ export interface DeliverInput {
   subject: string;
   emailHtml: string;
   noteBody: string; // may contain "{url}" placeholder
+  /** RFC-style sender, e.g. `Aesthetics Central <hello@…>`. Omit to let the GHL
+   *  sub-account fall back to its own default sending address. */
+  emailFrom?: string;
 }
 
 export interface DeliverResult {
@@ -127,6 +130,7 @@ export async function deliverReportToGhl(
           contactId,
           subject: input.subject,
           html: input.emailHtml,
+          ...(input.emailFrom ? { emailFrom: input.emailFrom } : {}),
           attachments: [fileUrl],
         }),
       });
