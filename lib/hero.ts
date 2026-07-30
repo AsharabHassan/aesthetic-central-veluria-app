@@ -175,6 +175,7 @@ export function concernZones(
       const expected = expectedForArea(a.area, categories, {
         concern: a.concern,
         treatment: a.treatment,
+        scope: a.scope,
       });
       if (!expected || expected.kind === "consult") return null;
       const product = productFor(a.area, a.concern);

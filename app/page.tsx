@@ -99,8 +99,117 @@ export default function Home() {
    *
    * A ref, not state, because nothing renders from it and a re-render must not
    * restart a running request.
-   */
+  */
   const analysisPromise = useRef<Promise<SkinAnalysis> | null>(null);
+  /**
+   * The After request starts as soon as Claude finishes the photo analysis,
+   * while the client is still completing the form. It is the exact same
+   * four-candidate request and quality gate; only its start time moves earlier.
+   */
+  const previewPromise = useRef<Promise<string | null> | null>(null);
+  const previewForImage = useRef<string | null>(null);
+
+  const startPreview = (
+    image: string,
+    analysisResult: SkinAnalysis,
+  ): Promise<string | null> => {
+    if (previewPromise.current && previewForImage.current === image)
+      return previewPromise.current;
+
+    const heroArea = heroZone(
+      analysisResult.annotations,
+      analysisResult.categories,
+    );
+    const previewPreserve = [
+      ...new Set([
+        ...(analysisResult.preserve ?? []),
+        ...analysisResult.annotations
+          .filter((annotation) => annotation.scope === "preserve")
+          .map(
+            (annotation) =>
+              `${annotation.area}: ${annotation.concern} — leave unchanged`,
+          ),
+      ]),
+    ];
+    const previewAbort = new AbortController();
+    const previewTimeout = window.setTimeout(
+      () => previewAbort.abort(),
+      255_000,
+    );
+
+    setPreviewPending(true);
+    setPreviewFailed(false);
+    setPreviewStage(0);
+    previewForImage.current = image;
+    const request = fetch("/api/transform", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: previewAbort.signal,
+      body: JSON.stringify({
+        image,
+        afterImagePrompt: analysisResult.afterImagePrompt,
+        preserve: previewPreserve,
+        concerns: analysisResult.annotations.map((annotation) => ({
+          area: annotation.area,
+          concern: annotation.concern,
+          scope: annotation.scope,
+        })),
+        hero: heroArea
+          ? { area: heroArea.area, concern: heroArea.concern }
+          : null,
+      }),
+    })
+      .then(async (response) => {
+        if (!response.ok || !response.body) return null;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let final: string | null = null;
+
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split("\n\n");
+          buffer = frames.pop() ?? "";
+          for (const frame of frames) {
+            const line = frame.split("\n").find((item) => item.startsWith("data:"));
+            if (!line) continue;
+            let message: {
+              type?: string;
+              image?: string;
+              stage?: number;
+            };
+            try {
+              message = JSON.parse(line.slice(5).trim());
+            } catch {
+              continue;
+            }
+            if (message.type === "partial") {
+              setPreviewStage((stage) => stage + 1);
+            } else if (
+              message.type === "stage" &&
+              typeof message.stage === "number"
+            ) {
+              setPreviewStage((stage) =>
+                Math.max(stage, message.stage ?? stage),
+              );
+            } else if (message.type === "final" && message.image) {
+              final = message.image;
+            } else if (message.type === "error") {
+              return null;
+            }
+          }
+        }
+        return final;
+      })
+      .catch(() => null)
+      .finally(() => window.clearTimeout(previewTimeout));
+
+    request.catch(() => {});
+    previewPromise.current = request;
+    return request;
+  };
 
   const startAnalysis = (image: string): Promise<SkinAnalysis> => {
     const p = fetch("/api/analyze", {
@@ -110,7 +219,11 @@ export default function Home() {
     }).then(async (r) => {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.error ?? "Analysis failed.");
-      return data.analysis as SkinAnalysis;
+      const result = data.analysis as SkinAnalysis;
+      // This is the speed win: overlap the expensive image edit with the
+      // remaining form-filling time instead of waiting for form submission.
+      startPreview(image, result);
+      return result;
     });
     // Attach a catch so an early rejection cannot surface as an unhandled
     // rejection while the client is still filling in the form. The real
@@ -125,6 +238,8 @@ export default function Home() {
     // Drop any in-flight analysis, or a second run would await the FIRST
     // photo's result and describe skin the client is no longer looking at.
     analysisPromise.current = null;
+    previewPromise.current = null;
+    previewForImage.current = null;
     setSelfie(null);
     setLead(null);
     setLeadMeta(null);
@@ -198,7 +313,7 @@ export default function Home() {
     setMapPending(true);
     setPreviewPending(true);
     setPreviewFailed(false);
-    setPreviewStage(0);
+    if (!previewPromise.current) setPreviewStage(0);
 
     let analysisResult: SkinAnalysis;
     try {
@@ -264,21 +379,63 @@ export default function Home() {
     // real BEFORE panel and all — instead of popping cards in as results land.
     setZoneTargets(zoneTargets);
     setZonePending(zoneTargets.length > 0);
+    const previewPreserve = [
+      ...new Set([
+        ...(analysisResult.preserve ?? []),
+        ...analysisResult.annotations
+          .filter((annotation) => annotation.scope === "preserve")
+          .map(
+            (annotation) =>
+              `${annotation.area}: ${annotation.concern} — leave unchanged`,
+          ),
+      ]),
+    ];
 
-    const previewSettled = fetch("/api/transform", {
+    // The server has its own shared 240 second budget. This client watchdog is
+    // deliberately a little longer: even if a browser or proxy fails to
+    // deliver the closing SSE frame, the UI can never remain on "Final pass"
+    // forever.
+    const previewAbort = new AbortController();
+    const previewTimeout = window.setTimeout(
+      () => previewAbort.abort(),
+      255_000,
+    );
+    const previewResponse = previewPromise.current
+      ? previewPromise.current.then(
+          (after) =>
+            new Response(
+              `data: ${JSON.stringify(
+                after
+                  ? { type: "final", image: after }
+                  : { type: "error" },
+              )}\n\n`,
+              { headers: { "Content-Type": "text/event-stream" } },
+            ),
+        )
+      : fetch("/api/transform", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: previewAbort.signal,
       body: JSON.stringify({
         image,
         // Claude's own brief, written from this photograph during the analysis.
         afterImagePrompt: analysisResult.afterImagePrompt,
         // Moles, skin tags, rosacea, melasma, active acne, thread veins — the
         // things a booster does not treat, so the picture must not treat them.
-        preserve: analysisResult.preserve,
-        concerns: zoneTargets.map((z) => ({ area: z.area, concern: z.concern })),
+        preserve: previewPreserve,
+        // Send the whole face analysis, not only the three crops shown in the
+        // reel. The server uses this to identify whether the completed
+        // programme includes five-session Ultra Lift; limiting it to the reel
+        // could silently turn a five-session preview into a three-session one.
+        concerns: analysisResult.annotations.map((z) => ({
+          area: z.area,
+          concern: z.concern,
+          scope: z.scope,
+        })),
         hero: heroArea ? { area: heroArea.area, concern: heroArea.concern } : null,
       }),
-    })
+        });
+    const previewSettled = previewResponse
       // STREAMED. The route emits progressive renders as the model produces
       // them, so the client watches their after photograph resolve from about
       // 10s instead of waiting ~200s to learn whether one is coming. Only the
@@ -301,7 +458,12 @@ export default function Home() {
           for (const frame of frames) {
             const line = frame.split("\n").find((l) => l.startsWith("data:"));
             if (!line) continue;
-            let msg: { type?: string; image?: string; reason?: string };
+            let msg: {
+              type?: string;
+              image?: string;
+              reason?: string;
+              stage?: number;
+            };
             try {
               msg = JSON.parse(line.slice(5).trim());
             } catch {
@@ -314,6 +476,11 @@ export default function Home() {
               // progress. What it is good for is telling the client, truthfully,
               // that the work moved a step.
               setPreviewStage((s) => s + 1);
+            } else if (
+              msg.type === "stage" &&
+              typeof msg.stage === "number"
+            ) {
+              setPreviewStage((s) => Math.max(s, msg.stage ?? s));
             } else if (msg.type === "final" && msg.image) {
               final = msg.image;
             } else if (msg.type === "error") {
@@ -328,6 +495,7 @@ export default function Home() {
         return final;
       })
       .catch(() => null)
+      .finally(() => window.clearTimeout(previewTimeout))
       .then(async (after): Promise<{ zone: HeroZone; pair: ZonePair }[]> => {
         if (!after) {
           setPreviewFailed(true);
@@ -554,6 +722,7 @@ export default function Home() {
             zonePending={zonePending}
             hero={hero}
             analysis={analysis}
+            preserve={analysis.preserve}
             email={lead?.email ?? null}
             name={lead?.name ?? null}
             onRestart={reset}

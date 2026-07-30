@@ -7,6 +7,7 @@ import { inspectAfterBrief } from "@/lib/promptGuard";
 import { hydrationGrade, glowStrengthFromEnv } from "@/lib/glow";
 import type { ConcernArea } from "@/lib/prompts";
 import type { HeroFocus } from "@/lib/hero";
+import { planFor } from "@/lib/veluria";
 
 /**
  * THE "AFTER" PHOTOGRAPH. One whole-face edit, not an assembly of crops.
@@ -78,7 +79,22 @@ const QUALITY = (process.env.AFTER_QUALITY as "low" | "medium" | "high") ?? "med
  * any two configs tested, which is why picking from a handful beats tuning.
  */
 const CANDIDATES = Number(process.env.AFTER_CANDIDATES ?? 4);
+/** One expensive retry is cheaper than publishing an invisible result. */
+const RESCUE_QUALITY = (
+  process.env.AFTER_RESCUE_QUALITY as "low" | "medium" | "high"
+) ?? "medium";
 const VERIFY_MODEL = "claude-sonnet-5";
+/**
+ * The request must finish before the platform's 300 second route ceiling.
+ * Previously every upstream call had its own 290 second timeout, so four
+ * candidates, verification and a sequential rescue could keep the browser on
+ * "Final pass" indefinitely. This is one budget shared by the entire pipeline.
+ */
+const REQUEST_BUDGET_MS = Math.min(
+  275_000,
+  Math.max(90_000, Number(process.env.AFTER_MAX_WAIT_MS ?? 240_000)),
+);
+const VERIFY_CALL_TIMEOUT_MS = 40_000;
 /**
  * How many progressive renders to stream before the final image.
  *
@@ -87,6 +103,18 @@ const VERIFY_MODEL = "claude-sonnet-5";
  * be at least 1; see the streaming note in POST.
  */
 const PARTIALS = Number(process.env.AFTER_PARTIAL_IMAGES ?? 3);
+const TRANSIENT_ANTHROPIC = new Set([
+  408, 409, 429, 500, 502, 503, 504, 529,
+]);
+
+function transientAnthropicStatus(error: unknown): number | null {
+  if (typeof error !== "object" || error === null || !("status" in error))
+    return null;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" && TRANSIENT_ANTHROPIC.has(status)
+    ? status
+    : null;
+}
 
 interface Assessment {
   /** Would a client SEE the difference side by side? */
@@ -126,6 +154,9 @@ async function assess(
   before: Buffer,
   after: Buffer,
   preserve: string[],
+  concerns: ConcernArea[],
+  sessions: number,
+  deadlineAt: number,
 ): Promise<Assessment | null> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return null;
@@ -135,20 +166,24 @@ async function assess(
       sharp(b).resize(640, 640, { fit: "inside" }).jpeg({ quality: 85 }).toBuffer();
     const [b1, b2] = await Promise.all([shrink(before), shrink(after)]);
 
-    const msg = await client.messages.create({
+    const request = {
       model: VERIFY_MODEL,
       max_tokens: 300,
-      thinking: { type: "disabled" },
+      thinking: { type: "disabled" } as const,
       system:
         "You are auditing a simulated 'after' photograph for an aesthetics clinic. Image 1 is the " +
-        "client's real photograph, image 2 the simulation. Score 1-5 and reply with ONLY JSON.\n" +
+        `client's real photograph, image 2 a completed ${sessions}-session Veluria-course simulation. ` +
+        "Score 1-5 and reply with ONLY JSON.\n" +
+        "The intended treatable concerns are: " +
+        concerns.slice(0, 6).map((c) => `${c.area}: ${c.concern}`).join("; ") +
+        ".\n" +
         "visible: 5 = a client would immediately SEE the improvement side by side. 1 = the two look " +
         "the same; an unchanged image scores 1 here, never high.\n" +
         "photographic: 5 = an unretouched camera file with individual pores and skin grain visible. " +
         "1 = a beauty filter: poreless, waxy, plastic, blurred.\n" +
         "targeted: 5 = the improvement sits in the concern areas and the rest of the face is " +
         "untouched. 1 = the whole face has been uniformly smoothed.\n" +
-        "credible: 5 = a clinician would accept it as a real 12-week skin-treatment result AND it " +
+        `credible: 5 = a clinician would accept it as a real completed ${sessions}-session skin-treatment result AND it ` +
         "clearly shows one. 1 = either obviously a filter, or shows no result at all.\n" +
         "samePerson: true only if it is unmistakably the same individual — same bone structure, eye " +
         "shape and colour, eyebrows, hairline, apparent age, skin tone and depth, pose and framing. " +
@@ -164,16 +199,38 @@ async function assess(
         '"note":"one short sentence"}',
       messages: [
         {
-          role: "user",
+          role: "user" as const,
           content: [
-            { type: "text", text: "Image 1 — the client's own photograph:" },
-            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b1.toString("base64") } },
-            { type: "text", text: "Image 2 — the simulation:" },
-            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b2.toString("base64") } },
+            { type: "text" as const, text: "Image 1 — the client's own photograph:" },
+            { type: "image" as const, source: { type: "base64" as const, media_type: "image/jpeg" as const, data: b1.toString("base64") } },
+            { type: "text" as const, text: "Image 2 — the simulation:" },
+            { type: "image" as const, source: { type: "base64" as const, media_type: "image/jpeg" as const, data: b2.toString("base64") } },
           ],
         },
       ],
-    });
+    };
+    let msg: Awaited<ReturnType<typeof client.messages.create>> | null = null;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const remaining = deadlineAt - Date.now();
+        if (remaining < 1_500) return null;
+        msg = await client.messages.create(request, {
+          // The SDK retries by default. Keep retries in this deadline-aware
+          // loop so an overloaded verifier cannot silently multiply the wait.
+          maxRetries: 0,
+          timeout: Math.min(VERIFY_CALL_TIMEOUT_MS, remaining - 500),
+        });
+        break;
+      } catch (error) {
+        const status = transientAnthropicStatus(error);
+        if (!status || attempt >= 2 || deadlineAt - Date.now() < 2_500)
+          throw error;
+        await new Promise((resolve) =>
+          setTimeout(resolve, 750 * 2 ** attempt),
+        );
+      }
+    }
+    if (!msg) return null;
 
     const text = msg.content.find((b) => b.type === "text");
     if (!text || text.type !== "text") return null;
@@ -219,6 +276,12 @@ function parseConcerns(v: unknown): ConcernArea[] {
     .map((c) => ({
       area: typeof c.area === "string" ? c.area.trim() : "",
       concern: typeof c.concern === "string" ? c.concern.trim() : "",
+      scope:
+        c.scope === "preserve"
+          ? ("preserve" as const)
+          : c.scope === "veluria"
+            ? ("veluria" as const)
+            : undefined,
     }))
     .filter((c) => c.area.length > 0);
 }
@@ -234,7 +297,15 @@ export async function POST(req: Request) {
     afterImagePrompt?: unknown;
     preserve?: unknown;
     concerns?: unknown;
+    /** Backward-compatible alias used by the older branded clinic clients. */
+    areas?: unknown;
     hero?: unknown;
+    /**
+     * Older branded clients expect one JSON response rather than SSE. They
+     * still run the exact same candidate, grading and verification pipeline;
+     * only the response envelope differs.
+     */
+    responseMode?: unknown;
   };
   try {
     body = await req.json();
@@ -259,60 +330,14 @@ export async function POST(req: Request) {
       ? (body.hero as HeroFocus)
       : null;
   const preserve = parsePreserve(body.preserve);
-  const base = verdict.ok
-    ? verdict.prompt
-    : buildAfterImagePrompt(parseConcerns(body.concerns), false, false, hero);
-
-  /**
-   * THE UNTREATABLE LIST IS APPENDED HERE, NOT LEFT TO THE BRIEF.
-   *
-   * Claude is asked to include it and usually does, but "usually" is the wrong
-   * standard for this one. A mole, a skin tag, rosacea, melasma, active acne, a
-   * thread vein — a skin booster does not touch any of them, so a simulation
-   * that quietly clears them is a false claim about a medical treatment, and
-   * for a clinic that is an advertising-standards problem rather than a bug.
-   *
-   * It goes LAST because the last instruction carries weight, and it is phrased
-   * as "still exactly as they are" rather than a prohibition, because naming
-   * the thing to keep survives the edit better than forbidding its removal.
-   */
-  /**
-   * THE EXCLUSION CLAUSE, and it is phrased this way because the plain version
-   * did not work.
-   *
-   * Simply listing what to keep loses to the brief above it. That brief asks for
-   * smoother texture, more even tone and clearer skin, and the model applies
-   * those to the WHOLE face — including the very features we are asking it to
-   * leave alone. Measured on three faces with acne and pigmentation, "keep
-   * these unchanged" came back preserved=false every time: the lesions were
-   * still in place but visibly calmer.
-   *
-   * So it does not merely repeat the prohibition. It (1) scopes the improvements
-   * explicitly to the surrounding skin, resolving the contradiction at its
-   * source, (2) names the ATTRIBUTE — colour and intensity — because "keep the
-   * spot" is satisfied by a spot that is no longer red, and (3) gives a positive
-   * target: against clearer skin these should stand out MORE, not less. A model
-   * given something to aim at follows better than one given only a list of
-   * things not to do.
-   */
-  const prompt = preserve.length
-    ? `${base}\n\n` +
-      `EXCLUDED FROM EVERY IMPROVEMENT DESCRIBED ABOVE. The smoother texture, ` +
-      `softer lines, more even tone and clearer skin described above apply ONLY ` +
-      `to the surrounding skin. This treatment does not act on the following at ` +
-      `all, and they must appear in the after photograph exactly as they do in ` +
-      `the original — same colour, same intensity, same darkness, same redness, ` +
-      `same size, same number, same position:\n${preserve
-        .map((p) => `- ${p}`)
-        .join("\n")}\n\n` +
-      `Anything red stays exactly as red. Anything inflamed stays exactly as ` +
-      `inflamed. Anything brown stays exactly as brown and exactly as dark. Do ` +
-      `not calm, fade, desaturate, soften, even out, blend, clear, reduce or ` +
-      `thin out any of them, and do not reduce how many there are.\n\n` +
-      `Because the skin around them is clearer, they should stand out MORE in ` +
-      `the after photograph than in the original, not less. That is the correct ` +
-      `result: healthy skin surrounding untreated marks.`
-    : base;
+  const concerns = parseConcerns(body.concerns ?? body.areas);
+  const matched = planFor(concerns);
+  const sessions = Math.max(...matched.map((product) => product.sessions), 3);
+  const prompt = buildAfterImagePrompt(concerns, hero, {
+    personalised: verdict.ok ? verdict.prompt : null,
+    preserve,
+    sessions,
+  });
   console.log(
     verdict.ok
       ? "[transform] brief: claude-authored"
@@ -349,19 +374,40 @@ export async function POST(req: Request) {
    */
   const encoder = new TextEncoder();
   const started = Date.now();
+  const deadlineAt = started + REQUEST_BUDGET_MS;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      let streamOpen = true;
       const send = (payload: Record<string, unknown>) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+        if (!streamOpen) return;
+        try {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(payload)}\n\n`),
+          );
+        } catch {
+          streamOpen = false;
+        }
       };
+      // Quality comparison and identity verification do not produce image
+      // partials. A small heartbeat keeps proxies and browsers from treating
+      // that legitimate quiet period as a dead connection.
+      const heartbeat = setInterval(
+        () => send({ type: "heartbeat" }),
+        15_000,
+      );
 
       /**
        * One generation. Only the first candidate reports progress, because the
        * client's bar has four steps and four candidates ticking it at once
        * would race it to the end while the work was barely started.
        */
-      const generate = async (text: string, reportProgress: boolean): Promise<string | null> => {
+      const generate = async (
+        text: string,
+        reportProgress: boolean,
+        quality: "low" | "medium" | "high" = QUALITY,
+        source: Buffer = square,
+      ): Promise<string | null> => {
         // RAW HTTP, NOT THE SDK. The installed openai SDK (4.104) has no
         // `partial_images` on the images resource — only on `responses`.
         // Passing `stream: true` through it did not error: it returned the
@@ -370,26 +416,53 @@ export async function POST(req: Request) {
         // size exceeded" a couple of million promises later.
         const form = new FormData();
         form.append("model", "gpt-image-2");
-        form.append("image", new Blob([new Uint8Array(square)], { type: "image/png" }), "face.png");
+        form.append(
+          "image",
+          new Blob([new Uint8Array(source)], { type: "image/png" }),
+          "face.png",
+        );
         form.append("prompt", text);
         form.append("size", "1024x1024");
-        form.append("quality", QUALITY);
-        form.append("stream", "true");
-        form.append("partial_images", String(PARTIALS));
+        form.append("quality", quality);
+        // The endpoint defaults to PNG. A photographic JPEG at 95 keeps the
+        // same visible detail while moving far fewer bytes through four API
+        // responses and base64 decoders. The final local grade is JPEG already.
+        form.append("output_format", "jpeg");
+        form.append("output_compression", "95");
+        if (reportProgress) {
+          form.append("stream", "true");
+          form.append("partial_images", String(PARTIALS));
+        }
         // input_fidelity is deliberately absent: gpt-image-2 rejects it and
         // always processes reference images at high fidelity anyway.
 
+        const remaining = deadlineAt - Date.now();
+        if (remaining < 2_000) return null;
+        const perCallCeiling = quality === "high" ? 180_000 : 135_000;
         const res = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST",
           headers: { Authorization: `Bearer ${apiKey}` },
           body: form,
-          signal: AbortSignal.timeout(290_000),
+          signal: AbortSignal.timeout(
+            Math.max(1_000, Math.min(perCallCeiling, remaining - 1_000)),
+          ),
         });
-        if (!res.ok || !res.body) {
+        if (!res.ok) {
           const detail = await res.text().catch(() => "");
           console.error(`[transform] upstream ${res.status}: ${detail.slice(0, 300)}`);
           return null;
         }
+
+        // Only the candidate the client is watching needs partial frames.
+        // Background candidates return ordinary JSON, avoiding three paid
+        // partial renders per candidate that nobody ever sees.
+        if (!reportProgress) {
+          const payload = (await res.json()) as {
+            data?: Array<{ b64_json?: string }>;
+          };
+          return payload.data?.[0]?.b64_json ?? null;
+        }
+        if (!res.body) return null;
 
         let b64: string | null = null;
         const reader = res.body.getReader();
@@ -442,60 +515,200 @@ export async function POST(req: Request) {
          * one — and because they run in parallel the client waits ~70s instead
          * of ~190s. Better result, a third of the wait, same money.
          */
-        const shots = await Promise.all(
-          Array.from({ length: Math.max(1, CANDIDATES) }, (_, i) => generate(prompt, i === 0)),
+        const candidatePrompts = [
+          prompt,
+          `${prompt}\n\nFINAL EMPHASIS: At side-by-side comparison size, make the first treatment priority immediately visible while staying within every preservation and identity constraint.`,
+          `${prompt}\n\nFINAL EMPHASIS: Preserve real pores, fine skin grain and local shine in the improved areas. The result must read as treated skin photographed by a camera, never retouched skin.`,
+          `${prompt}\n\nFINAL EMPHASIS: Show the strongest believable end-of-course improvement allowed by this brief. A merely dewy or almost unchanged version is not a successful result.`,
+        ];
+        let generatedCount = 0;
+        const candidateResults = await Promise.allSettled(
+          Array.from({ length: Math.max(1, CANDIDATES) }, async (_, i) => {
+            const candidateStarted = Date.now();
+            const b64 = await generate(
+              candidatePrompts[i % candidatePrompts.length],
+              i === 0,
+            );
+            if (!b64) return null;
+
+            generatedCount += 1;
+            if (generatedCount === 1) send({ type: "stage", stage: 4 });
+            if (generatedCount === 2) send({ type: "stage", stage: 5 });
+
+            const image = await hydrationGrade(
+              Buffer.from(b64, "base64"),
+              glowStrengthFromEnv(),
+              square,
+              0,
+            );
+            const generatedMs = Date.now() - candidateStarted;
+            const v = await assess(
+              square,
+              image,
+              preserve,
+              concerns,
+              sessions,
+              deadlineAt,
+            );
+            return {
+              image,
+              v,
+              generatedMs,
+              totalMs: Date.now() - candidateStarted,
+            };
+          }),
         );
-        const made = shots.filter((s): s is string => s !== null);
-        if (!made.length) {
+        const candidates = candidateResults
+          .map((result) =>
+            result.status === "fulfilled" ? result.value : null,
+          )
+          .filter((candidate): candidate is NonNullable<typeof candidate> =>
+            Boolean(candidate),
+          );
+        if (!candidates.length) {
           send({ type: "error", error: "We couldn't generate your after image." });
-          controller.close();
           return;
         }
 
-        const graded = await Promise.all(
-          made.map((b64) =>
-            // The tone lock earns its place here: measured, gpt-image-2 raised
-            // facial luminance 46% on a Black subject, and that is
-            // skin-lightening whatever the prompt said. hydrationGrade applies
-            // it FIRST, against raw output. Firmness stays off — turning the
-            // grade up was measured and made the result LESS different, because
-            // its tone lock pulls back toward the client's own photograph.
-            hydrationGrade(Buffer.from(b64, "base64"), glowStrengthFromEnv(), square, 0),
-          ),
-        );
-        const judged = await Promise.all(graded.map((g) => assess(square, g, preserve)));
+        if (generatedCount < 2) send({ type: "stage", stage: 5 });
+        let allGraded = candidates.map((candidate) => candidate.image);
+        let judged = candidates.map((candidate) => candidate.v);
 
         // Rank on what the clinic needs: a result the client can SEE that still
         // looks like a photograph of them. `credible` blends both, so it leads,
         // with `photographic` as the tie-break against a convincing-but-plastic
         // winner. A candidate that is not the same person is unusable at any
         // score, so it is pushed to the bottom rather than merely penalised.
+        const safe = (v: Assessment | null) =>
+          Boolean(
+            v &&
+              v.samePerson &&
+              v.visible >= 3 &&
+              v.photographic >= 3 &&
+              v.credible >= 3 &&
+              (v.preserved !== false),
+          );
+        // A result can be safe to show even when it falls short of the stronger
+        // commercial visibility gate. Previously those identity-safe,
+        // photographic results were thrown away and the UI blamed the input
+        // photo. The stronger gate still triggers a correction pass; this one
+        // decides only whether a completed image is honest enough to publish.
+        const publishable = (v: Assessment | null) =>
+          Boolean(
+            v &&
+              v.samePerson &&
+              v.photographic >= 3 &&
+              (v.preserved !== false),
+          );
         const rank = (v: Assessment | null) =>
-          !v ? 0
-            : (v.samePerson ? 100 : 0) +
-              v.credible * 2 + v.photographic + v.visible + v.targeted;
+          !v
+            ? 0
+            : (safe(v) ? 1000 : 0) +
+              (v.samePerson ? 100 : 0) +
+              (v.preserved === false ? -100 : 0) +
+              v.visible * 3 +
+              v.credible * 3 +
+              v.photographic * 2 +
+              v.targeted;
 
-        const order = graded
+        let order = allGraded
           .map((image, i) => ({ image, v: judged[i] }))
           .sort((a, b) => rank(b.v) - rank(a.v));
+
+        // Do not publish a technically valid but commercially useless image.
+        // If the medium batch contains no visible, credible and preserved
+        // result, spend the high-quality call here — only on the consultations
+        // that need it — and judge it by exactly the same gate.
+        // Leave enough time for one corrected medium render and its verifier.
+        // If the shared deadline is already tight, finish with the ranked batch
+        // instead of starting work the browser cannot possibly receive.
+        if (
+          !order.some((candidate) => safe(candidate.v)) &&
+          deadlineAt - Date.now() >= 55_000
+        ) {
+          send({ type: "stage", stage: 6 });
+          const notes = judged
+            .filter((v): v is Assessment => Boolean(v?.note))
+            .map((v) => v.note)
+            .slice(0, 3)
+            .join(" ");
+          const rescuePrompt =
+            `${prompt}\n\nQUALITY CORRECTION\n` +
+            `This is the strongest current AFTER draft, but it is still too subtle` +
+            `${notes ? `: ${notes}` : "."} Do not reverse its existing improvements. ` +
+            `Take the treatable changes one clear, believable step further so the ` +
+            `difference is immediately visible in a 50/50 comparison. ` +
+            `The improvement must be plainly visible, the person and framing must ` +
+            `remain identical, excluded features must survive exactly, and real ` +
+            `pores and fine skin grain must remain visible.`;
+          // Iterate from the strongest current draft instead of asking the model
+          // to start over from the untreated photograph. Starting over produced
+          // another equally subtle draw; building on the best draft makes the
+          // correction cumulative.
+          const rescueSource = await sharp(order[0].image).png().toBuffer();
+          const rescued = await generate(
+            rescuePrompt,
+            false,
+            RESCUE_QUALITY,
+            rescueSource,
+          ).catch(() => null);
+          if (rescued) {
+            const rescuedGrade = await hydrationGrade(
+              Buffer.from(rescued, "base64"),
+              glowStrengthFromEnv(),
+              square,
+              0,
+            );
+            const rescuedJudge = await assess(
+              square,
+              rescuedGrade,
+              preserve,
+              concerns,
+              sessions,
+              deadlineAt,
+            );
+            allGraded = [...allGraded, rescuedGrade];
+            judged = [...judged, rescuedJudge];
+            order = allGraded
+              .map((image, i) => ({ image, v: judged[i] }))
+              .sort((a, b) => rank(b.v) - rank(a.v));
+          }
+        }
+
         const best = order[0];
         const check = best.v;
 
         console.log(
-          `[transform] ${QUALITY} x${made.length} in ${((Date.now() - started) / 1000).toFixed(0)}s — ` +
+          `[transform] ${QUALITY} x${candidates.length} in ${((Date.now() - started) / 1000).toFixed(0)}s — ` +
             `kept ${check ? `cred ${check.credible} photo ${check.photographic} vis ${check.visible}` : "unjudged"} ` +
             `of [${judged.map((v) => (v ? v.credible : "?")).join(", ")}]` +
+            ` — candidate pipelines [${candidates
+              .map(
+                (candidate) =>
+                  `${(candidate.generatedMs / 1000).toFixed(0)}>${(candidate.totalMs / 1000).toFixed(0)}s`,
+              )
+              .join(", ")}]` +
             (check ? ` — same person: ${check.samePerson}, preserved: ${check.preserved} (${check.note})` : ""),
         );
 
-        // REFUSE ON IDENTITY ONLY. Showing someone a face that is not theirs is
-        // the one failure worse than showing no result — everything else the
-        // page can qualify in words, but it cannot un-show a stranger.
-        if (check && !check.samePerson) {
+        // Every published preview must now clear the four gates clients and the
+        // clinic actually care about: identity, visible difference, photographic
+        // credibility and preservation of out-of-scope features.
+        if (check && !publishable(check)) {
+          const reason = !check.samePerson
+            ? "identity"
+            : check.preserved === false
+              ? "preservation"
+              : "realism";
           send({
             type: "error",
-            reason: "identity",
-            error: "The simulation did not hold your likeness closely enough to show.",
+            reason,
+            error:
+              reason === "identity"
+                ? "The simulation did not hold your likeness closely enough to show."
+                : reason === "preservation"
+                  ? "The simulation changed a feature the treatment cannot change."
+                  : "The simulation did not look photographic enough to show.",
             note: check.note,
           });
         } else {
@@ -504,16 +717,57 @@ export async function POST(req: Request) {
             image: `data:image/jpeg;base64,${best.image.toString("base64")}`,
             verified: check?.samePerson ?? null,
             improved: check ? check.visible >= 3 : null,
+            strong: check ? safe(check) : null,
             preserved: check?.preserved ?? null,
           });
         }
       } catch (err) {
         console.error("[transform] failed:", err);
         send({ type: "error", error: "We couldn't generate your after image." });
+      } finally {
+        clearInterval(heartbeat);
+        if (streamOpen) {
+          streamOpen = false;
+          controller.close();
+        }
       }
-      controller.close();
     },
   });
+
+  if (body.responseMode === "json") {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let image: string | null = null;
+    let error = "We couldn't generate your after image.";
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        const line = frame.split("\n").find((item) => item.startsWith("data:"));
+        if (!line) continue;
+        try {
+          const message = JSON.parse(line.slice(5).trim()) as {
+            type?: string;
+            image?: string;
+            error?: string;
+          };
+          if (message.type === "final" && message.image) image = message.image;
+          if (message.type === "error" && message.error) error = message.error;
+        } catch {
+          // A malformed progress frame must not hide a later valid final frame.
+        }
+      }
+    }
+
+    return image
+      ? NextResponse.json({ image })
+      : NextResponse.json({ error }, { status: 502 });
+  }
 
   return new Response(stream, {
     headers: {

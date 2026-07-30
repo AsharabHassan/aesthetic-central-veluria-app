@@ -33,6 +33,12 @@ export interface FaceAnnotation {
   concern: string;
   /** Suggested treatment direction (Veluria where skin-quality related) */
   treatment: string;
+  /**
+   * Explicit claim boundary from the vision analysis. `preserve` means the
+   * feature may be flagged and discussed, but no preview or projection may
+   * imply that Veluria changed it.
+   */
+  scope?: "veluria" | "preserve";
   severity: "low" | "moderate" | "notable";
   /**
    * The image prompt for THIS area's close-up, written by Claude during the

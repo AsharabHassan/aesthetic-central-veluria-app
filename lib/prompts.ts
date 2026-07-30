@@ -1,4 +1,4 @@
-import { planFor } from "@/lib/veluria";
+import { isExtensivePigmentation, planFor } from "@/lib/veluria";
 import type { HeroFocus } from "@/lib/hero";
 
 export const ANALYSIS_SYSTEM_PROMPT = `You are a senior aesthetic skin consultant at Aesthetics Central Clinic, a science-led UK aesthetics clinic specialising in natural results and medically precise treatments. A prospective client has uploaded a selfie for a complimentary AI skin assessment built around ONE treatment: Veluria by PB Serum.
@@ -27,6 +27,10 @@ Veluria is PB Serum's professional BIOREMODELING range. Every product is built o
 
 HOW TO PHRASE IT: always an APPEARANCE claim, never a medical one. Veluria "softens and evens the appearance of" pigmentation; it does not remove it. It "calms irritated-looking redness"; it does not remove blood vessels. It "brightens"; it NEVER lightens or whitens someone's natural skin tone. Never guarantee an outcome.
 Prefer the manufacturer's own wording wherever it fits — it is the safest form of every claim we make, and it is already appearance-level: Veluria "refines skin texture", "enhances radiance", "improves the appearance of skin firmness", "boosts luminosity", and "helps reduce the appearance of uneven tone".
+
+EXTENSIVE PIGMENTATION SAFETY BOUNDARY — distinguish these two cases:
+- MILD, DISCRETE uneven tone or a few small superficial-looking sun/age spots: Veluria Pearl Tone may realistically soften and even their appearance. Mark scope "veluria".
+- EXTENSIVE, DENSE, CONFLUENT, WIDESPREAD, MASK-LIKE, SHARPLY DEFINED, HIGH-CONTRAST or otherwise PRONOUNCED pigmentation spanning a large area or several facial zones: this is OUTSIDE what a Veluria or skin-booster preview may claim. Do not diagnose it or name a condition. Mark scope "preserve"; make the concern start with "Extensive pigmentation pattern — outside Veluria scope"; start the treatment sentence exactly "Beyond Veluria's scope — "; and add every affected region to preserve with its visible distribution, colour intensity and boundaries. The After image must leave all of it unchanged. Do not recommend Pearl Tone for this extensive pattern; the recommendation must say it needs clinician assessment, while other genuinely treatable concerns may still receive their own Veluria recommendation. A low Tone score alone is not enough for this rule — use it only when the visible extent and density are substantial.
 
 ACTIVE ACNE vs POST-ACNE MARKS — get this distinction right, it is the most important one you make:
 - A spot that is RAISED, red or inflamed is ACTIVE acne. Veluria does NOT treat it. Say so.
@@ -64,6 +68,7 @@ Then write:
     - area: the correct aesthetic-medicine term. Use terms from this set where applicable: "Forehead lines", "Glabella / frown lines", "Periorbital lines (crow's feet)", "Tear trough / under-eye", "Cheek hydration & glow", "Nasolabial folds", "Marionette lines", "Perioral (lip) lines", "Skin texture & pores", "Uneven tone / pigmentation", "Visible redness", "Jawline & lower-face skin laxity", "Cheek & mid-face laxity".
       FIRMNESS AND LINES ARE NOT OPTIONAL. If this face shows ANY visible slackness along the jawline or across the cheeks, or any forehead, frown or crow's-feet lines, you MUST flag at least one of them as an annotation. Veluria Ultra Lift is the product that answers them, and skipping them tells the client we have nothing for the concern they are most likely to have come in with.
     - concern: one short phrase on what is visibly observed there.
+    - scope: "veluria" when the image preview may show the concern improving, or "preserve" when it must be flagged but left unchanged. Extensive pigmentation as defined above is always "preserve".
     - treatment: one short, honest sentence. Two cases:
         * Concern WITHIN the Veluria range: NAME THE MATCHING PRODUCT and say what it can realistically improve there. Pigmentation, uneven tone, sun spots, dullness → Veluria Pearl Tone. Laxity, firmness, jawline definition, forehead lines, frown lines, crow's feet → Veluria Ultra Lift. Texture, pores, hydration, glow, fine surface lines, post-acne marks, irritated-looking redness → Veluria Silk Skin. Example: "A course of Veluria Pearl Tone can visibly soften and even these sun spots and brighten the overall tone." Never guarantee outcomes.
         * Concern genuinely OUTSIDE the range (active acne, visible capillaries/thread veins, deep folds or volume loss, moles or lesions, ice-pick scarring): the sentence MUST start with exactly "Beyond Veluria's scope — " followed by a short note that the clinician can advise at the consultation. Do NOT name any other product or treatment. Example: "Beyond Veluria's scope — the clinician can advise on this at your consultation."
@@ -80,17 +85,33 @@ Then write:
   This list does two jobs, and both matter: it tells the image model what it may not touch, and it tells the client honestly what this treatment will not do for them. A simulated photograph that quietly clears someone's rosacea or removes a mole is a false claim about a medical treatment, and it is the failure this list exists to prevent.
 - afterImagePrompt: THE PHOTOGRAPHIC BRIEF for this person's simulated "after" PHOTOGRAPH — one brief for the whole face, not one per area. An image model will edit THIS person's own photo with it, and you are the only thing in the pipeline that has actually looked at them.
 
-  LEAD WITH THE RESULT. THEN LOCK IDENTITY ONCE, AT THE END. This ordering is the whole job. A brief that opens with everything that must not change, and repeats it, produces a photograph in which nothing changed — that failure has already shipped to real clients from this system. Say plainly what the after photograph SHOWS, then close by saying it is the same person.
+  WRITE ONLY THE PERSONALISED RESULT. The server adds the course length,
+  preservation list, identity lock and photography requirements itself. Repeating
+  those here produced long, prohibition-heavy prompts in which the actual result
+  was buried — and clients received an "after" that looked unchanged.
 
   Structure it as:
-  1. One line: a photograph of this same woman (or man) twelve weeks into a course of professional skin treatment.
-  2. Four to six short bullets, each naming an area you flagged above and what has visibly improved there — the crow's feet markedly shallower, the crepey texture under the eyes smooth, the nasolabial folds softer, the forehead lines reduced, tone even, pores refined, skin hydrated with a natural light on it. Be specific to THIS face: which way the lines run, where the light falls, their undertone, whether lines are fine and crosshatched or few and deep.
-  3. One paragraph listing WHAT MUST NOT CHANGE AT ALL, built from your "preserve" list above. Copy each entry in, word for word, introduced as features that are still exactly as they are in the original — same size, same shape, same colour, same position. If "preserve" is empty, write the sentence about moles and freckles only. This paragraph is not optional and it is not decoration: these are things this treatment genuinely cannot do, and a photograph that quietly fixes them is a false claim.
-  4. One closing paragraph locking identity, and be concrete about the parts that drift: this is the same photograph of the same person — identical face, bone structure, eye colour, eyebrow shape and thickness, hairline and hairstyle, clothing, pose, expression, camera angle, distance and crop, background and lighting; the head is the same size in the frame and in the same position; the same age; real photographic skin with visible pores and fine detail, a clinical after-photograph, never airbrushed, plastic or blurred.
+  1. A heading exactly: "CHANGE ONLY THESE TREATABLE SKIN QUALITIES:"
+  2. Three or four short bullets naming the highest-priority areas you flagged and
+     the completed-course result that is clearly visible there — for example:
+     crow's feet markedly shallower but still present; crepey under-eye texture
+     smoother and less shadowed; forehead lines softened; tone more even; pores
+     refined; dehydrated skin supple with a natural sheen.
+  3. Make the FIRST bullet the single change that will sell the result side by
+     side. Be specific to THIS face: where the lines run, how deep or crosshatched
+     they are, where the light falls, and the person's actual undertone.
 
-  Describe only what Veluria treats — surface: line depth, texture, tone, clarity, hydration, how the light sits. Do not ask for volume, filler, lifting, tightening, contour or bone structure; those are not renderable and asking for them measurably makes the result worse. Never ask for a mole, freckle, scar or blood vessel to be removed. Never ask for skin to be made lighter, paler or whiter — "brighter" means it reflects more light, never that the colour changes.
+  Describe only what Veluria treats — surface line depth, texture, tone, clarity,
+  hydration and how light sits on the skin. Do not include scene-setting, course
+  length, identity instructions, a preserve list or photography instructions;
+  the server owns those. Do not ask for volume, filler, lifting, tightening,
+  contour or bone structure. Never ask for a mole, freckle, scar or blood vessel
+  to be removed. Never include an annotation whose scope is "preserve" among the
+  requested changes; extensive pigmentation must be omitted from the change
+  bullets and will be locked by the server. Never ask for skin to be made lighter, paler or whiter —
+  "brighter" means healthier reflection at the same skin colour.
 
-  Aim for 150-250 words. This is the single most important field in your reply.
+  Aim for 80-140 words. This is the single most important field in your reply.
 - veluriaRecommendation: 2-3 sentences setting out THIS person's Veluria plan. Name the specific product(s) their concerns call for and why (e.g. "Pearl Tone to even the sun damage across your cheeks, alongside Silk Skin to refine texture"). Be specific to what you actually observed. If some of their concerns genuinely sit outside the range, acknowledge that honestly in one clause and note the clinician will advise at the consultation. Warm and encouraging, never guaranteeing results. End with a gentle invitation to book a consultation.
 
 Rules:
@@ -107,7 +128,7 @@ Rules:
     {"label":"Firmness & elasticity","score":number,"note":string}
   ],
   "annotations": [
-    {"x":number,"y":number,"area":string,"concern":string,"treatment":string,"severity":"low"|"moderate"|"notable"}
+    {"x":number,"y":number,"area":string,"concern":string,"treatment":string,"scope":"veluria"|"preserve","severity":"low"|"moderate"|"notable"}
   ],
   "preserve": [string],
   "afterImagePrompt": string,
@@ -119,6 +140,16 @@ Each note must be a single short sentence. Scores must be integers. x and y must
 export interface ConcernArea {
   area: string;
   concern: string;
+  scope?: "veluria" | "preserve";
+}
+
+export interface AfterPromptOptions {
+  /** Claude's face-specific, result-only brief after it has passed the guard. */
+  personalised?: string | null;
+  /** Visible features the treatment genuinely cannot change. */
+  preserve?: string[];
+  /** Longest completed course in the matched Veluria programme. */
+  sessions?: number;
 }
 
 /**
@@ -175,6 +206,8 @@ function targetedAfterAction(
   const t = `${area} ${concern}`.toLowerCase();
 
   // Out of the range entirely: reproduce it, and improve the skin around it.
+  if (isExtensivePigmentation(t))
+    return "reproduce the entire extensive pigmentation pattern exactly as photographed — identical distribution, boundaries, density, contrast and colour in every affected region. It is outside this Veluria preview's claim and must not be faded, evened, brightened, recoloured or reduced";
   if (/(active acne|inflammatory acne|cystic|pustule|breakout|pimple|papule|whitehead|blackhead)/.test(t))
     return "reproduce every active breakout and pimple exactly as in the original — Veluria works on the marks acne leaves behind, not on active acne. The skin around and between them becomes visibly clearer, calmer, smoother and more luminous";
   if (/(capillar|thread vein|telangiectas|broken vein|vascular|rosacea)/.test(t))
@@ -243,9 +276,8 @@ function targetedAfterAction(
  */
 export function buildAfterImagePrompt(
   concerns: ConcernArea[],
-  _hasReferences = false,
-  _annotate = false,
   hero: HeroFocus | null = null,
+  options: AfterPromptOptions = {},
 ): string {
   const list: ConcernArea[] =
     concerns.length > 0
@@ -259,22 +291,46 @@ export function buildAfterImagePrompt(
   // The headline concern leads, and is not repeated in the list below — stating
   // it twice flattens it back into "one of six", which is the levelling this
   // ordering exists to undo.
+  const treatable = list.filter((c) => c.scope !== "preserve");
   const rest = hero
-    ? list.filter((c) => c.area.toLowerCase() !== hero.area.toLowerCase())
-    : list;
+    ? treatable.filter((c) => c.area.toLowerCase() !== hero.area.toLowerCase())
+    : treatable;
 
-  const bullets = [
+  const fallbackBullets = [
     ...(hero ? [`- the ${hero.concern} at the ${hero.area} is markedly improved and this is the first thing a viewer notices`] : []),
     ...rest.map((c) => `- ${c.area.toLowerCase()}: ${skinAction(c.area, c.concern)}`),
     "- the skin overall is even in tone, hydrated and healthy, with a natural light sitting on it",
   ].join("\n");
 
-  return `A photograph of this same person twelve weeks into a course of professional skin treatment at Aesthetics Central Clinic.
+  const resultBrief = options.personalised?.trim() || fallbackBullets;
+  const sessions = Math.max(1, Math.min(5, Math.round(options.sessions ?? 3)));
+  const course =
+    sessions === 5
+      ? "a completed five-session Veluria course"
+      : `a completed ${sessions}-session Veluria course`;
+  const preserve = (options.preserve ?? [])
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 10);
+  const preserveBlock = preserve.length
+    ? preserve.map((item) => `- ${item}`).join("\n")
+    : "- every mole, freckle, beauty spot, raised or inflamed spot, thread vein and broken capillary visible in the original";
 
-Their skin is the only thing that has changed, and the change is clearly visible:
-${bullets}
+  return `INTENDED USE
+Create a photorealistic clinical follow-up photograph for a side-by-side consultation preview. It shows this same person after ${course}. The improvement must be immediately visible at comparison size, clearly stronger than a hydration filter, and still believable as one completed treatment course.
 
-This is the same photograph of the same person: identical face, bone structure, eye colour, hairstyle, eyebrows, clothing, pose, expression, camera angle, background and lighting. They are the same age with the same features. Keep every mole and freckle exactly where it is, and leave any raised or inflamed spot, thread vein and broken capillary untouched — those are not what this treatment works on. Their skin colour is unchanged: same depth, same melanin, same undertone, with the healthier skin simply returning more light. Real photographic skin with visible pores and fine detail — a clinical after-photograph, never airbrushed, plastic or blurred.`;
+TREATMENT RESULT — CHANGE ONLY THESE TREATABLE SKIN QUALITIES
+${resultBrief}
+
+VISIBLE STRENGTH
+Show the full completed-course result, not an early or subtle change. The first priority above is the first difference a viewer notices. Lines may become markedly shallower but remain naturally present; texture may become refined but must keep individual pores and fine skin grain. Do not make the person look younger and do not solve the request with global blur, whitening or a generic beauty filter.
+
+PRESERVE EXACTLY — EXCLUDED FROM THE TREATMENT RESULT
+${preserveBlock}
+Each item above remains the same colour, intensity, size, number and position. Improve only the treatable skin around it. Do not remove, fade, calm, recolour or accentuate any excluded feature.
+
+IDENTITY AND CAPTURE — KEEP EVERYTHING ELSE THE SAME
+Same person and same photograph: identical face geometry, eye shape and colour, nose, lips, teeth, eyebrow shape and thickness, hairline and hairstyle, clothing, pose, expression, eyelid position, camera angle, distance, crop, background and lighting. The head stays the same size and position in frame. Skin colour stays at exactly the same depth, melanin and undertone; healthier skin reflects light without becoming lighter. Photorealistic, unretouched-looking clinical camera file with visible pores, fine lines, vellus hair, skin grain and natural local shine — never waxy, poreless, plastic or blurred.`;
 }
 
 /**
@@ -336,6 +392,11 @@ This is the same photograph of the same person: identical face, bone structure, 
  */
 function skinAction(area: string, concern: string): string {
   const t = `${area} ${concern}`.toLowerCase();
+
+  if (isExtensivePigmentation(t))
+    return `- reproduce the extensive pigmentation pattern exactly as photographed
+- keep its distribution, boundaries, density, contrast and colour unchanged
+- do not fade, even, brighten, recolour or reduce any affected area`;
 
   if (/(dark circle|under[ -]?eye|tear trough|periorbital|infraorbital|eye bag)/.test(t))
     return `- the crepey, finely-crosshatched texture under her eyes is gone, replaced by smooth, even skin

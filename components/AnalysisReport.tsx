@@ -279,6 +279,7 @@ export default function AnalysisReport({
   const concernList = concerns.map((a) => ({
     area: a.area,
     concern: a.concern,
+    scope: a.scope,
   }));
   // planFor, NOT programmeFor. `programmeFor` widens the product list using the
   // category scores, but only the products a concern actually matched get to
@@ -541,11 +542,12 @@ export default function AnalysisReport({
               className="absolute inset-0 h-full w-full object-cover opacity-30 blur-sm"
             />
             <p className="relative text-sm font-medium text-plum">
-              We couldn&rsquo;t build your full-face preview from this photo.
+              We held back this preview because it did not pass our likeness and
+              realism checks.
             </p>
             <p className="relative text-xs text-plum-soft">
-              Your analysis below is unaffected. A brighter photo taken facing a
-              window usually fixes this.
+              Your photograph and analysis are valid. We simply will not show an
+              After image that changes who you are or looks artificially retouched.
             </p>
           </div>
         ) : null}

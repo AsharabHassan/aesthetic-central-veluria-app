@@ -28,7 +28,10 @@ const STAGES = [
   "Setting up your photograph",
   "Rendering your result",
   "Refining skin detail",
-  "Final pass",
+  "Completing the full-resolution render",
+  "Comparing the strongest results",
+  "Checking likeness and realism",
+  "Strengthening the final result",
 ] as const;
 
 export default function PreviewProgress({
@@ -102,8 +105,8 @@ export default function PreviewProgress({
         </div>
 
         <p className="mt-3 text-xs text-plum-mute">
-          Step {clamped + 1} of {STAGES.length} · your photograph is rendered at
-          full clinical resolution, which takes around three minutes.
+          Step {clamped + 1} of {STAGES.length} · usually 2–4 minutes in total.
+          This preview will stop cleanly if an image provider is delayed.
         </p>
       </div>
     </div>

@@ -134,7 +134,11 @@ export function buildConcernsPayload(
     // consultation can open on their concern instead of a blank slot request.
     veluria_plan: planSummary(
       planFor(
-        analysis.annotations.map((a) => ({ area: a.area, concern: a.concern })),
+        analysis.annotations.map((a) => ({
+          area: a.area,
+          concern: a.concern,
+          scope: a.scope,
+        })),
       ),
     ),
     focus_area: heroZone(analysis.annotations, analysis.categories)?.area ?? "",

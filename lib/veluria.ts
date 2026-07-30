@@ -139,6 +139,11 @@ export const VELURIA_PRODUCTS: Record<VeluriaProductId, VeluriaProduct> = {
  */
 export const OUT_OF_SCOPE: { match: RegExp; why: string }[] = [
   {
+    match:
+      /(?:extensive|widespread|dense|confluent|pronounced|marked|severe|mask[ -]?like|large[ -]?area|sharply (?:defined|bordered)).{0,60}(?:hyperpigment|pigment|discolou?r|melasma|mottl|dark (?:patch|area))|(?:hyperpigment|pigment|discolou?r|melasma|mottl|dark (?:patch|area)).{0,60}(?:extensive|widespread|dense|confluent|pronounced|marked|severe|mask[ -]?like|large[ -]?area|sharply (?:defined|bordered))/i,
+    why: "extensive or high-contrast pigmentation is outside this preview's skin-booster claim and needs clinician assessment",
+  },
+  {
     match: /(active acne|inflammatory acne|cystic|pustule|breakout|papule|whitehead|blackhead)/i,
     why: "active breakouts need medical management — Veluria works on the marks they leave behind, not on active acne",
   },
@@ -165,6 +170,11 @@ export function isOutOfScope(text: string): string | null {
   return null;
 }
 
+/** A narrow safety boundary: mild, discrete uneven tone remains in scope. */
+export function isExtensivePigmentation(text: string): boolean {
+  return OUT_OF_SCOPE[0].match.test(text);
+}
+
 /**
  * Matches a flagged concern to the Veluria product that actually addresses it.
  * Out-of-scope concerns are checked FIRST so they can never be mis-sold.
@@ -178,7 +188,10 @@ export function productFor(area: string, concern: string): VeluriaProduct | null
   // here would up-sell the brightener to clients with no pigment concern at all.
   if (/(pigment|dark spot|sun spot|age spot|melasma|discolou?r|uneven tone|\btone\b|sallow|blotch|hyperpigment)/.test(t))
     return VELURIA_PRODUCTS["pearl-tone"];
-  if (/(laxity|lax|sag|firm|elastic|jawline|jowl|slack|contour)/.test(t))
+  if (
+    /(laxity|lax|sag|firm|elastic|jawline|jowl|slack|contour)/.test(t) ||
+    /(?:forehead|frown|glabella|crow|periorbital).{0,30}(?:line|wrinkle|crease)|(?:line|wrinkle|crease).{0,30}(?:forehead|frown|glabella|crow|periorbital)/.test(t)
+  )
     return VELURIA_PRODUCTS["ultra-lift"];
   // Everything else in scope is skin quality: texture, pores, fine lines,
   // hydration, glow, dullness, post-acne marks, calm-able redness.
@@ -187,20 +200,30 @@ export function productFor(area: string, concern: string): VeluriaProduct | null
 
 /** The distinct products a client's concerns call for — their recommended plan. */
 export function planFor(
-  concerns: { area: string; concern: string }[],
+  concerns: {
+    area: string;
+    concern: string;
+    scope?: "veluria" | "preserve";
+  }[],
 ): VeluriaProduct[] {
   const seen = new Set<VeluriaProductId>();
   const plan: VeluriaProduct[] = [];
   for (const c of concerns) {
+    if (c.scope === "preserve") continue;
     const p = productFor(c.area, c.concern);
     if (p && !seen.has(p.id)) {
       seen.add(p.id);
       plan.push(p);
     }
   }
-  // Skin quality underpins the whole range: if nothing matched, Silk Skin is the
-  // sensible default rather than showing the client no plan at all.
-  return plan.length > 0 ? plan : [VELURIA_PRODUCTS["silk-skin"]];
+  // Use Silk Skin only when there was no concern data at all. If concerns were
+  // supplied and every one is outside scope, inventing a default product would
+  // contradict the consult-only flags shown beside them.
+  return plan.length > 0
+    ? plan
+    : concerns.length === 0
+      ? [VELURIA_PRODUCTS["silk-skin"]]
+      : [];
 }
 
 /**

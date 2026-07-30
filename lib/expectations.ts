@@ -236,8 +236,13 @@ const TREATMENT_OUT_OF_SCOPE =
 export function expectedForArea(
   area: string,
   categories: AnalysisCategory[],
-  opts?: { concern?: string; treatment?: string },
+  opts?: {
+    concern?: string;
+    treatment?: string;
+    scope?: "veluria" | "preserve";
+  },
 ): ExpectedImprovement | null {
+  if (opts?.scope === "preserve") return CONSULT;
   const text = `${area} ${opts?.concern ?? ""}`.toLowerCase();
   if (OUT_OF_SCOPE.test(text)) return CONSULT;
   if (opts?.treatment && TREATMENT_OUT_OF_SCOPE.test(opts.treatment))

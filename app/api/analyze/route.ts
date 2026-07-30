@@ -1,12 +1,23 @@
 import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { ANALYSIS_SYSTEM_PROMPT } from "@/lib/prompts";
+import { isExtensivePigmentation } from "@/lib/veluria";
 import type { SkinAnalysis } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const MODEL = "claude-sonnet-5";
+const TRANSIENT_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
+
+function transientStatus(error: unknown): number | null {
+  if (typeof error !== "object" || error === null || !("status" in error))
+    return null;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" && TRANSIENT_STATUSES.has(status)
+    ? status
+    : null;
+}
 
 type ImageMediaType = "image/jpeg" | "image/png" | "image/webp" | "image/gif";
 
@@ -30,6 +41,55 @@ function extractJson(text: string): SkinAnalysis | { error: string } | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Enforce the vision model's claim boundary before any downstream consumer can
+ * build a product plan or an After prompt from it.
+ */
+function enforcePreservationScope(analysis: SkinAnalysis): SkinAnalysis {
+  const preserve = Array.isArray(analysis.preserve)
+    ? analysis.preserve.filter((item): item is string => typeof item === "string")
+    : [];
+  const additions: string[] = [];
+  const annotations = (analysis.annotations ?? []).map((annotation) => {
+    const text = `${annotation.area} ${annotation.concern} ${annotation.treatment}`;
+    if (!isExtensivePigmentation(text)) return annotation;
+
+    additions.push(
+      `the extensive pigmentation pattern across ${annotation.area.toLowerCase()} — preserve its full distribution, boundaries, density, contrast and colour exactly`,
+    );
+    return {
+      ...annotation,
+      scope: "preserve" as const,
+      concern: (() => {
+        const observation = annotation.concern.replace(
+          /\bmelasma\b/gi,
+          "pigmentation pattern",
+        );
+        return /^extensive pigmentation pattern — outside veluria scope/i.test(
+          observation,
+        )
+          ? observation
+          : `Extensive pigmentation pattern — outside Veluria scope; ${observation}`;
+      })(),
+      treatment:
+        "Beyond Veluria's scope — this extensive pigmentation pattern should be assessed by the clinician and is left unchanged in the preview.",
+    };
+  });
+
+  for (const annotation of annotations) {
+    if (annotation.scope !== "preserve") continue;
+    additions.push(
+      `${annotation.area}: ${annotation.concern} — leave unchanged in the preview`,
+    );
+  }
+
+  return {
+    ...analysis,
+    annotations,
+    preserve: [...new Set([...preserve, ...additions])].slice(0, 12),
+  };
 }
 
 export async function POST(req: Request) {
@@ -58,47 +118,64 @@ export async function POST(req: Request) {
 
   const client = new Anthropic({ apiKey });
 
-  const callModel = async (nudge?: string) =>
-    client.messages.create({
-      model: MODEL,
-      // 3000 was right when an annotation was four short fields. It is not now:
-      // each annotation also carries `imagePrompt`, a 60-90 word photographic
-      // brief, and at 4-7 annotations that is roughly 1500-2500 extra tokens.
-      // The response was being truncated mid-object, so the JSON never parsed,
-      // both attempts failed, and the client was told "we couldn't analyse that
-      // photo" — for a photo that was completely fine.
-      //
-      // Sized with real headroom rather than to the measured minimum: running
-      // out here costs a whole consultation, and unused output tokens cost
-      // nothing.
-      max_tokens: 8000,
-      // Sonnet 5 runs adaptive thinking by default — keep it off for this
-      // fast, structured-JSON vision call so responses stay quick and the
-      // token budget goes entirely to the analysis.
-      thinking: { type: "disabled" },
-      system: ANALYSIS_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: [
+  const callModel = async (nudge?: string) => {
+    // Provider overload is transient, but the previous route turned the first
+    // 529/5xx into a dead-end consultation. Retry a small bounded number of
+    // times; malformed JSON is still handled separately below because that
+    // needs a different prompt, not the same request again.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await client.messages.create({
+          model: MODEL,
+          // 3000 was right when an annotation was four short fields. It is not now:
+          // each annotation also carries `imagePrompt`, a 60-90 word photographic
+          // brief, and at 4-7 annotations that is roughly 1500-2500 extra tokens.
+          // The response was being truncated mid-object, so the JSON never parsed,
+          // both attempts failed, and the client was told "we couldn't analyse that
+          // photo" — for a photo that was completely fine.
+          //
+          // Sized with real headroom rather than to the measured minimum: running
+          // out here costs a whole consultation, and unused output tokens cost
+          // nothing.
+          max_tokens: 8000,
+          // Sonnet 5 runs adaptive thinking by default — keep it off for this
+          // fast, structured-JSON vision call so responses stay quick and the
+          // token budget goes entirely to the analysis.
+          thinking: { type: "disabled" },
+          system: ANALYSIS_SYSTEM_PROMPT,
+          messages: [
             {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: image.mediaType,
-                data: image.data,
-              },
-            },
-            {
-              type: "text",
-              text:
-                nudge ??
-                "Assess this person's skin and return the JSON exactly as specified.",
+              role: "user",
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: image.mediaType,
+                    data: image.data,
+                  },
+                },
+                {
+                  type: "text",
+                  text:
+                    nudge ??
+                    "Assess this person's skin and return the JSON exactly as specified.",
+                },
+              ],
             },
           ],
-        },
-      ],
-    });
+        });
+      } catch (error) {
+        const status = transientStatus(error);
+        if (!status || attempt >= 2) throw error;
+        const delay = 900 * 2 ** attempt;
+        console.warn(
+          `[analyze] Anthropic ${status}; retrying in ${delay}ms (${attempt + 1}/2)`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  };
 
   try {
     let msg = await callModel();
@@ -145,7 +222,9 @@ export async function POST(req: Request) {
       );
     }
 
-    return NextResponse.json({ analysis: parsed });
+    return NextResponse.json({
+      analysis: enforcePreservationScope(parsed),
+    });
   } catch (err) {
     console.error("[analyze] failed:", err);
     return NextResponse.json(
