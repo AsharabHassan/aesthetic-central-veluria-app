@@ -192,7 +192,11 @@ async function faceLuminance(buf: Buffer): Promise<number> {
   // lightening through under a measurement that looked fine.
   const crop = await sharp(buf)
     .resize(1024, 1024, { fit: "fill" })
-    .extract({ left: 352, top: 352, width: 320, height: 320 })
+    // Measure the full visible face, not only the nose/mouth centre. The image
+    // model can keep that small centre at parity while dimming the forehead and
+    // cheeks, which made the clinical "after" look worse despite passing the
+    // old lock. This wider crop catches exposure drift across the whole face.
+    .extract({ left: 192, top: 192, width: 640, height: 640 })
     .png()
     .toBuffer();
   const s = await sharp(crop).stats();

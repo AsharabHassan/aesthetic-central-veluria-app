@@ -44,13 +44,13 @@ export interface VeluriaProduct {
   /** Actives, taken from the INCI — not the marketing. */
   actives: string;
   /**
-   * Vials in a pack, which is the course length. Ultra Lift is FIVE, not three.
+   * INTERNAL VISUALISATION ENDPOINT — never a prescribed protocol.
    *
-   * INTERNAL ONLY — never rendered to a client. How many sessions someone needs
-   * is a prescribing decision and it belongs to the doctor at the consultation,
-   * not to a report generated from a selfie. This number still reaches the
-   * image prompt (which needs to know it is depicting a completed course) and
-   * the CRM (where the clinic reads it), and nothing else.
+   * Public professional listings vary by product and clinician, while PBSerum's
+   * public Veluria page does not publish one universal session count. The user
+   * selected a five-session completed-course scenario for this consultation
+   * preview, so this value calibrates the image and verifier only. The treating
+   * clinician still determines the real number, interval and technique.
    */
   sessions: number;
   /** What this product is matched to, in the client's language. */
@@ -74,24 +74,24 @@ export const VELURIA_PRODUCTS: Record<VeluriaProductId, VeluriaProduct> = {
   "silk-skin": {
     id: "silk-skin",
     name: "Veluria Silk Skin",
-    tagline: "Skin quality & texture — the “glass skin” refiner",
+    tagline: "Skin quality, smoothness & radiance",
     // sh-Oligopeptide-1 is EGF, and it is on the INCI: the solution vial lists
     // Sodium DNA (PDRN), sodium hyaluronate, palmitoyl pentapeptide-4, Centella
     // asiatica and sh-Oligopeptide-1. We were naming four of the five.
     actives:
       "Collagenase G&H, PDRN, palmitoyl pentapeptide-4, sh-oligopeptide-1 (EGF), Centella asiatica, hyaluronic acid",
-    sessions: 3,
+    sessions: 5,
     treats: [
       "rough, uneven texture and enlarged-looking pores",
       "dull, tired, dehydrated skin",
       "fine surface lines and crepiness",
-      "post-acne marks and textural scarring",
+      "post-acne marks and mild uneven texture",
       "irritated, reactive-looking redness (calming, not vessel removal)",
     ],
     contributes:
       "the surface itself — PDRN and EGF rebuild the skin you actually see and touch, so everything the other two do is read off a smoother, denser, better-lit canvas",
     visibleResult:
-      "the skin surface is resurfaced into a smooth, even, refined “glass skin” texture; pores read tighter and cleaner; fine lines and crepiness are plumped out; post-acne marks and textural scarring are visibly softened and shallower (still present, but far less pronounced); irritated-looking redness reads calmer and less angry",
+      "the skin surface looks noticeably smoother and more refined; enlarged-looking pores are less visible but remain real; hydration, luminosity and surface suppleness improve; superficial fine lines and mild post-acne unevenness look softer without being erased",
   },
   "ultra-lift": {
     id: "ultra-lift",
@@ -108,7 +108,7 @@ export const VELURIA_PRODUCTS: Record<VeluriaProductId, VeluriaProduct> = {
     contributes:
       "the structure underneath — DMAE firms and tightens, so refined skin sits where it should instead of hanging, and the lower face reads defined rather than soft",
     visibleResult:
-      "the skin looks firmer, tighter and more elastic — it sits better on the face, the jawline and lower-face contour read more defined and less slack, and the whole face looks lifted and revitalised. This is the SKIN looking tighter: do not reshape the face, slim it, alter the bone structure or add filler-style volume",
+      "after the completed five-session visualisation, the skin looks visibly firmer, tighter and more elastic; cheek support reads stronger, lower-face slackness is reduced and the jaw transition looks cleaner while the person's facial silhouette, volume, bone structure and identity remain unchanged. This is a moderate-to-strong skin-quality result, not a surgical lift or facial reshaping",
   },
   "pearl-tone": {
     id: "pearl-tone",
@@ -118,7 +118,7 @@ export const VELURIA_PRODUCTS: Record<VeluriaProductId, VeluriaProduct> = {
     // saying: pigment and sun damage rarely stop at the jaw.
     tagline: "Even tone & radiance — the brightener, for face and neck",
     actives: "Collagenase G&H, glutathione, hyaluronic acid",
-    sessions: 3,
+    sessions: 5,
     treats: [
       "uneven skin tone and visible colour differences",
       "sun spots, age spots and hyperpigmentation",
@@ -128,7 +128,7 @@ export const VELURIA_PRODUCTS: Record<VeluriaProductId, VeluriaProduct> = {
     contributes:
       "the colour — glutathione evens what the light is landing on, which is what turns firmer, smoother skin into skin that actually looks clear and lit",
     visibleResult:
-      "the complexion reads clearer and far more EVEN — AT EXACTLY THE SAME SKIN COLOUR AND DEPTH AS THE ORIGINAL. Discrete sun spots, age spots and pigment patches are visibly SOFTENED and less contrasted against the skin around them (still there, just far less obvious). The skin looks luminous because it REFLECTS MORE LIGHT, never because it has become a lighter colour. FRECKLES ARE NOT PIGMENTATION AND ARE NEVER TOUCHED — reproduce every one exactly. Deep skin stays exactly as deep: this is never lightening, bleaching or whitening, and the person's real skin tone and ethnicity are identical",
+      "mild diffuse uneven tone looks clearer and more uniform at exactly the same natural skin colour and depth. A few discrete superficial-looking marks may be modestly less contrasted but remain present. Freckles and significant, extensive or high-contrast pigmentation stay unchanged. Luminosity comes from healthier light reflection, never lightening, bleaching or whitening",
   },
 };
 
@@ -156,8 +156,9 @@ export const OUT_OF_SCOPE: { match: RegExp; why: string }[] = [
     why: "this is structural volume, not skin quality — the clinician will advise at consultation",
   },
   {
-    match: /(mole|skin tag|lesion|suspicious)/i,
-    why: "any lesion needs a clinician's eye and is never treated cosmetically",
+    match:
+      /(mole|skin tag|birthmark|lesion|suspicious|open wound|healing wound|ulcer|crust|scal(?:e|y|ing)|weeping|bleeding|rash|infection|infected|cold sore|blister|dermatitis|eczema|psoriasis)/i,
+    why: "a visible lesion or possible skin-condition feature needs clinician assessment and must remain unchanged",
   },
   {
     match: /(ice.?pick|deep pitted|atrophic scar)/i,

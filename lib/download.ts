@@ -2,6 +2,7 @@ import type { SkinAnalysis } from "./types";
 import { drawCover, loadImage } from "./canvas";
 import { expectedImprovement } from "./expectations";
 import { DISCLAIMER_FULL } from "./legal";
+import { planFor } from "./veluria";
 
 /** Trigger a browser download of a data URL (e.g. a generated PNG). */
 export function downloadDataUrl(dataUrl: string, filename: string): void {
@@ -177,6 +178,13 @@ export interface AnalysisPdfOptions {
  */
 async function buildAnalysisPdf(opts: AnalysisPdfOptions) {
   const { analysis, before, zonePairs, map } = opts;
+  const pdfProgramme = planFor(
+    (analysis.annotations ?? []).map((annotation) => ({
+      area: annotation.area,
+      concern: annotation.concern,
+      scope: annotation.scope,
+    })),
+  );
   // The close-up sheet, in place of the retired full-face pair. JPEG here (not
   // PNG): a photographic PNG bloats the PDF to several MB, which makes the
   // emailed / GHL-hosted report slow to open.
@@ -286,6 +294,26 @@ async function buildAnalysisPdf(opts: AnalysisPdfOptions) {
 
   // Prominent disclaimer near the top so it's seen before the scores/preview.
   disclaimerBox();
+
+  heading("Understanding your Veluria plan");
+  body(
+    "Veluria is a professional cosmetic bioremodelling range focused on the visible quality of skin — including texture, firmness, tone, luminosity and vitality — while preserving natural facial features.",
+    10,
+  );
+  body(
+    "How it is used: your clinician assesses suitability, selects the appropriate formula and decides the treatment technique, number and spacing of sessions. At Aesthetics Central it may be integrated into a microneedling-led protocol when clinically appropriate.",
+    10,
+  );
+  if (pdfProgramme.length > 0) {
+    body(
+      `Matched to this analysis: ${pdfProgramme.map((product) => product.name).join(", ")}. The final plan is confirmed during consultation, not by the AI scan alone.`,
+      10,
+    );
+  }
+  body(
+    "Different goal: dermal filler primarily restores volume and contour; wrinkle-relaxing injections reduce selected muscle movement; Veluria focuses on the appearance of the skin itself. It may complement rather than replace those treatments. It does not diagnose or treat skin lesions, active skin disease, visible vessels or structural volume loss.",
+    10,
+  );
 
   // Scores
   heading("Skin scores");
@@ -439,7 +467,7 @@ async function buildAnalysisPdf(opts: AnalysisPdfOptions) {
 /** Build the branded analysis PDF and trigger a browser download. */
 export async function downloadAnalysisPdf(opts: AnalysisPdfOptions): Promise<void> {
   const doc = await buildAnalysisPdf(opts);
-  doc.save("OD-Aesthetics-Skin-Consultation.pdf");
+  doc.save("Aesthetics-Central-Skin-Consultation.pdf");
 }
 
 /**

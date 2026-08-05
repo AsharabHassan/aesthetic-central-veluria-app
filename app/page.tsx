@@ -5,7 +5,8 @@ import SelfieCapture from "@/components/SelfieCapture";
 import LeadForm from "@/components/LeadForm";
 import Processing from "@/components/Processing";
 import AnalysisReport from "@/components/AnalysisReport";
-import type { SkinAnalysis, LeadPayload } from "@/lib/types";
+import VeluriaEducation from "@/components/VeluriaEducation";
+import type { SkinAnalysis, LeadPayload, FaceAnnotation, SkinGoal } from "@/lib/types";
 import type { GhlMeta } from "@/lib/ghl";
 import { concernZones, heroZone, type HeroZone } from "@/lib/hero";
 import { cropRegion, loadImage, toSquare } from "@/lib/canvas";
@@ -31,6 +32,50 @@ export type ZonePair = {
   /** Where this crop came from, for compositing back onto the whole face. */
   box?: { left: number; top: number; side: number };
 };
+
+function previewProfile(analysis: SkinAnalysis, goals: SkinGoal[]) {
+  const annotations: FaceAnnotation[] = [...analysis.annotations];
+  const hydrationPriority = goals.includes("Hydration & glow");
+  const qualityScores = analysis.categories
+    .filter((category) => /(hydration|radiance)/i.test(category.label))
+    .map((category) => category.score);
+  const visibleQualityRoom = qualityScores.length > 0 && Math.min(...qualityScores) <= 75;
+
+  if (hydrationPriority && visibleQualityRoom) {
+    const existingIndex = annotations.findIndex((annotation) =>
+      /(hydrat|radiance|dull|glow|luminos)/i.test(`${annotation.area} ${annotation.concern}`),
+    );
+    if (existingIndex >= 0) {
+      const existing = annotations.splice(existingIndex, 1)[0];
+      annotations.unshift({
+        ...existing,
+        severity: "notable",
+        imagePrompt:
+          "Show a strong but photographic improvement in surface hydration and light reflection across both cheeks: supple, smoother and naturally luminous, with real pores and skin grain still visible and no whitening.",
+      });
+    } else {
+      annotations.unshift({
+        x: 50,
+        y: 56,
+        area: "Cheek hydration & radiance",
+        concern: "dull, dehydrated-looking mid-face with reduced surface luminosity",
+        treatment:
+          "A completed Veluria Silk Skin course can make the skin look visibly more supple, hydrated and luminous while keeping the same natural skin colour.",
+        scope: "veluria",
+        severity: "notable",
+        imagePrompt:
+          "Show a strong but photographic improvement in surface hydration and light reflection across both cheeks: supple, smoother and naturally luminous, with real pores and skin grain still visible and no whitening.",
+      });
+    }
+  }
+
+  const afterImagePrompt =
+    hydrationPriority && visibleQualityRoom
+      ? `${analysis.afterImagePrompt ?? ""}\n\nCLIENT-SELECTED PRIORITY — HYDRATION & GLOW\nMake the completed-course skin-quality change immediately visible: the dull, flat-looking mid-face becomes noticeably more supple, smooth and naturally luminous. Keep real pores and skin grain; keep exactly the same skin colour and depth. This hydration-and-radiance improvement is the first difference a viewer notices.`
+      : analysis.afterImagePrompt;
+
+  return { annotations, afterImagePrompt };
+}
 
 export default function Home() {
   const [step, setStep] = useState<Step>("welcome");
@@ -101,6 +146,7 @@ export default function Home() {
    * restart a running request.
   */
   const analysisPromise = useRef<Promise<SkinAnalysis> | null>(null);
+  const leadGoalsRef = useRef<SkinGoal[]>([]);
   /**
    * The After request starts as soon as Claude finishes the photo analysis,
    * while the client is still completing the form. It is the exact same
@@ -116,8 +162,9 @@ export default function Home() {
     if (previewPromise.current && previewForImage.current === image)
       return previewPromise.current;
 
+    const profile = previewProfile(analysisResult, leadGoalsRef.current);
     const heroArea = heroZone(
-      analysisResult.annotations,
+      profile.annotations,
       analysisResult.categories,
     );
     const previewPreserve = [
@@ -134,7 +181,7 @@ export default function Home() {
     const previewAbort = new AbortController();
     const previewTimeout = window.setTimeout(
       () => previewAbort.abort(),
-      255_000,
+      125_000,
     );
 
     setPreviewPending(true);
@@ -147,12 +194,15 @@ export default function Home() {
       signal: previewAbort.signal,
       body: JSON.stringify({
         image,
-        afterImagePrompt: analysisResult.afterImagePrompt,
+        afterImagePrompt: profile.afterImagePrompt,
         preserve: previewPreserve,
-        concerns: analysisResult.annotations.map((annotation) => ({
+        concerns: profile.annotations.map((annotation) => ({
           area: annotation.area,
           concern: annotation.concern,
           scope: annotation.scope,
+          x: annotation.x,
+          y: annotation.y,
+          severity: annotation.severity,
         })),
         hero: heroArea
           ? { area: heroArea.area, concern: heroArea.concern }
@@ -238,6 +288,7 @@ export default function Home() {
     // Drop any in-flight analysis, or a second run would await the FIRST
     // photo's result and describe skin the client is no longer looking at.
     analysisPromise.current = null;
+    leadGoalsRef.current = [];
     previewPromise.current = null;
     previewForImage.current = null;
     setSelfie(null);
@@ -346,8 +397,12 @@ export default function Home() {
 
     // The headline area. It no longer orders any prompt — it survives because
     // the booking link carries it as `focus` and every funnel event reports it.
+    const profile = previewProfile(
+      analysisResult,
+      activeLead?.goals ?? leadGoalsRef.current,
+    );
     const heroArea = heroZone(
-      analysisResult.annotations,
+      profile.annotations,
       analysisResult.categories,
     );
     setHero(heroArea);
@@ -358,7 +413,7 @@ export default function Home() {
         severity: a.severity,
       })) ?? [];
 
-    // ONE WHOLE-FACE GENERATION IS THE RESULT. The close-ups are cut from it.
+    // ONE MASKED GENERATION IS THE RESULT. The close-ups are cut from it.
     //
     // This replaces a pipeline that generated 2-3 tight zone crops and pasted
     // them back onto the client's photograph. That pipeline did what it was
@@ -366,13 +421,13 @@ export default function Home() {
     // so a strong zone edit scoring 16-23 produced a whole-face change of about
     // 2, and clients said their face looked the same. They were right.
     //
-    // Cutting the close-ups OUT of the generated after, rather than generating
+    // Cutting the close-ups OUT of the masked after, rather than generating
     // them separately, has a property the old shape could not offer at any
     // price: the reel and the slider are now the same photograph, so a client
     // who compares them can never find them disagreeing. It is also one billed
     // image instead of nine.
     const zoneTargets = concernZones(
-      analysisResult.annotations,
+      profile.annotations,
       analysisResult.categories,
     ).slice(0, ZONE_LIMIT);
     // Published immediately so the reel can reserve a card per zone — header and
@@ -398,7 +453,7 @@ export default function Home() {
     const previewAbort = new AbortController();
     const previewTimeout = window.setTimeout(
       () => previewAbort.abort(),
-      255_000,
+      125_000,
     );
     const previewResponse = previewPromise.current
       ? previewPromise.current.then(
@@ -419,7 +474,7 @@ export default function Home() {
       body: JSON.stringify({
         image,
         // Claude's own brief, written from this photograph during the analysis.
-        afterImagePrompt: analysisResult.afterImagePrompt,
+        afterImagePrompt: profile.afterImagePrompt,
         // Moles, skin tags, rosacea, melasma, active acne, thread veins — the
         // things a booster does not treat, so the picture must not treat them.
         preserve: previewPreserve,
@@ -427,10 +482,13 @@ export default function Home() {
         // reel. The server uses this to identify whether the completed
         // programme includes five-session Ultra Lift; limiting it to the reel
         // could silently turn a five-session preview into a three-session one.
-        concerns: analysisResult.annotations.map((z) => ({
+        concerns: profile.annotations.map((z) => ({
           area: z.area,
           concern: z.concern,
           scope: z.scope,
+          x: z.x,
+          y: z.y,
+          severity: z.severity,
         })),
         hero: heroArea ? { area: heroArea.area, concern: heroArea.concern } : null,
       }),
@@ -646,28 +704,17 @@ export default function Home() {
               ))}
             </div>
 
-            {/* Short enzyme / Veluria explainer — a little science on the
-                landing page so visitors know what the treatment behind the
-                analysis actually is. Kept brief and appearance-level. */}
             <div
-              className="mx-auto mt-14 max-w-xl animate-fade-scale rounded-[1.6rem] border border-white/70 bg-white/55 p-6 text-left backdrop-blur-sm sm:p-8"
+              className="mx-auto mt-14 max-w-2xl animate-fade-scale"
               style={{ animationDelay: "540ms" }}
             >
-              <p className="eyebrow">The science · Veluria</p>
-              <h2 className="display mt-2 text-2xl text-plum sm:text-3xl">
-                Skin, rebuilt by <span className="serum-text italic">enzymes</span>
-              </h2>
-              <p className="mt-4 leading-relaxed text-plum-soft">
-                Veluria is a professional <strong className="font-medium text-plum">enzyme
-                bioremodelling</strong> range. Rather than sitting on the surface, its
-                recombinant collagenase enzymes work <em>within</em> your skin — gently
-                clearing tired, disorganised collagen and prompting your skin to build
-                fresh collagen of its own.
-              </p>
-              <p className="mt-3 leading-relaxed text-plum-soft">
-                Over a short course, the skin looks firmer, smoother and more even —
-                rebuilt from within, not simply hydrated on top.
-              </p>
+              <VeluriaEducation
+                cta={
+                  <button onClick={() => setStep("capture")} className="btn-ghost">
+                    See what may suit my skin
+                  </button>
+                }
+              />
             </div>
           </section>
         )}
@@ -696,6 +743,9 @@ export default function Home() {
           <section key="form" className="w-full animate-fade-scale">
             <LeadForm
               selfie={selfie}
+              onGoalsChange={(goals) => {
+                leadGoalsRef.current = goals;
+              }}
               onSubmitted={(submittedLead, submittedMeta) => {
                 setLead(submittedLead);
                 setLeadMeta(submittedMeta);
@@ -725,6 +775,7 @@ export default function Home() {
             preserve={analysis.preserve}
             email={lead?.email ?? null}
             name={lead?.name ?? null}
+            phone={lead?.phone ?? null}
             onRestart={reset}
           />
         )}

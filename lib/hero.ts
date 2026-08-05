@@ -216,7 +216,26 @@ export function heroZone(
   annotations: FaceAnnotation[] | undefined,
   categories: AnalysisCategory[],
 ): HeroZone | null {
-  return concernZones(annotations, categories)[0] ?? null;
+  const zones = concernZones(annotations, categories);
+  const hasPreservedConcern = (annotations ?? []).some(
+    (annotation) => annotation.scope === "preserve",
+  );
+  if (hasPreservedConcern) {
+    return (
+      zones.find((zone) =>
+        /(crow|periorbital|outer eye|under-eye)/i.test(
+          `${zone.area} ${zone.concern}`,
+        ),
+      ) ??
+      zones.find((zone) =>
+        /(forehead|glabella|fine line)/i.test(`${zone.area} ${zone.concern}`),
+      ) ??
+      zones.find((zone) => /(texture|pore)/i.test(`${zone.area} ${zone.concern}`)) ??
+      zones[0] ??
+      null
+    );
+  }
+  return zones[0] ?? null;
 }
 
 /**

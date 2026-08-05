@@ -4,13 +4,15 @@ import sharp from "sharp";
 import Anthropic from "@anthropic-ai/sdk";
 import { buildAfterImagePrompt } from "@/lib/prompts";
 import { inspectAfterBrief } from "@/lib/promptGuard";
-import { hydrationGrade, glowStrengthFromEnv } from "@/lib/glow";
+import { hydrationGrade, glowStrengthFromEnv, firmnessStrengthFromEnv } from "@/lib/glow";
 import type { ConcernArea } from "@/lib/prompts";
 import type { HeroFocus } from "@/lib/hero";
 import { planFor } from "@/lib/veluria";
+import { zoneWindowFor } from "@/lib/zoneCrop";
 
 /**
- * THE "AFTER" PHOTOGRAPH. One whole-face edit, not an assembly of crops.
+ * THE "AFTER" PHOTOGRAPH. One localised edit, constrained by a feathered mask
+ * built from the treatable concern coordinates.
  *
  * WHY THIS SHAPE, AND WHY THE PREVIOUS ONE WAS ABANDONED FOR THE WRONG REASON.
  * This route existed once, was judged not to work, and was replaced by a
@@ -72,13 +74,11 @@ const QUALITY = (process.env.AFTER_QUALITY as "low" | "medium" | "high") ?? "med
 /**
  * How many candidates to generate and judge.
  *
- * Four medium candidates cost $0.21 — the same as ONE high image, which
- * measured no better than a single medium one — and run in parallel, so the
- * client waits ~70s rather than ~190s. The spread WITHIN one config (4, 3, 3, 1
- * on credibility for the same face and prompt) is wider than the gap between
- * any two configs tested, which is why picking from a handful beats tuning.
+ * Two medium candidates run in parallel. The first one that clears every
+ * clinical and photographic gate is published immediately and the slower call
+ * is cancelled, so a good result is never held hostage by a provider outlier.
  */
-const CANDIDATES = Number(process.env.AFTER_CANDIDATES ?? 4);
+const CANDIDATES = Number(process.env.AFTER_CANDIDATES ?? 2);
 /** One expensive retry is cheaper than publishing an invisible result. */
 const RESCUE_QUALITY = (
   process.env.AFTER_RESCUE_QUALITY as "low" | "medium" | "high"
@@ -91,8 +91,8 @@ const VERIFY_MODEL = "claude-sonnet-5";
  * "Final pass" indefinitely. This is one budget shared by the entire pipeline.
  */
 const REQUEST_BUDGET_MS = Math.min(
-  275_000,
-  Math.max(90_000, Number(process.env.AFTER_MAX_WAIT_MS ?? 240_000)),
+  120_000,
+  Math.max(90_000, Number(process.env.AFTER_MAX_WAIT_MS ?? 115_000)),
 );
 const VERIFY_CALL_TIMEOUT_MS = 40_000;
 /**
@@ -175,8 +175,9 @@ async function assess(
         `client's real photograph, image 2 a completed ${sessions}-session Veluria-course simulation. ` +
         "Score 1-5 and reply with ONLY JSON.\n" +
         "The intended treatable concerns are: " +
-        concerns.slice(0, 6).map((c) => `${c.area}: ${c.concern}`).join("; ") +
+        concerns.filter((c) => c.scope !== "preserve").slice(0, 6).map((c) => `${c.area}: ${c.concern}`).join("; ") +
         ".\n" +
+        "Any concern marked for preservation is excluded from the treatment result. Do not lower visible or credible because an excluded feature correctly remains unchanged; score improvement only in the treatable concerns listed above.\n" +
         "visible: 5 = a client would immediately SEE the improvement side by side. 1 = the two look " +
         "the same; an unchanged image scores 1 here, never high.\n" +
         "photographic: 5 = an unretouched camera file with individual pores and skin grain visible. " +
@@ -189,13 +190,15 @@ async function assess(
         "shape and colour, eyebrows, hairline, apparent age, skin tone and depth, pose and framing. " +
         "Softer lines and clearer skin are expected and must NOT count against it; changed eyebrows, " +
         "a reshaped nose or jaw, a different apparent age or a lightened skin tone must.\n" +
+        "preserved: all pre-existing moles, freckles, birthmarks, skin tags, lesions, wounds, active or inflamed spots, " +
+        "crusted/scaly/rash-like areas, visible vessels and other condition-like features must remain unchanged in size, " +
+        "shape, colour, texture, number and position. " +
         (preserve.length
-          ? "preserved: are ALL of these still present and unchanged — same size, shape, colour and " +
-            "position? " + preserve.map((p) => `"${p}"`).join("; ") +
-            ". This treatment cannot change them, so a picture that does is a false claim.\n"
+          ? "Also verify every specifically listed feature: " + preserve.map((p) => `"${p}"`).join("; ") + ". "
           : "") +
+        "If any such feature was healed, removed, faded or cosmetically improved, preserved is false.\n" +
         'Reply exactly: {"visible":n,"photographic":n,"targeted":n,"credible":n,"samePerson":bool,' +
-        (preserve.length ? '"preserved":bool,' : "") +
+        '"preserved":bool,' +
         '"note":"one short sentence"}',
       messages: [
         {
@@ -244,7 +247,7 @@ async function assess(
       targeted: n(p.targeted),
       credible: n(p.credible),
       samePerson: p.samePerson === true,
-      preserved: preserve.length ? p.preserved === true : null,
+      preserved: p.preserved === true,
       note: typeof p.note === "string" ? p.note : "",
     };
   } catch (err) {
@@ -273,7 +276,7 @@ function parseConcerns(v: unknown): ConcernArea[] {
   if (!Array.isArray(v)) return [];
   return v
     .filter((c): c is Record<string, unknown> => typeof c === "object" && c !== null)
-    .map((c) => ({
+    .map((c): ConcernArea => ({
       area: typeof c.area === "string" ? c.area.trim() : "",
       concern: typeof c.concern === "string" ? c.concern.trim() : "",
       scope:
@@ -282,8 +285,138 @@ function parseConcerns(v: unknown): ConcernArea[] {
           : c.scope === "veluria"
             ? ("veluria" as const)
             : undefined,
+      x:
+        typeof c.x === "number" && Number.isFinite(c.x)
+          ? Math.max(0, Math.min(100, c.x))
+          : undefined,
+      y:
+        typeof c.y === "number" && Number.isFinite(c.y)
+          ? Math.max(0, Math.min(100, c.y))
+          : undefined,
+      severity:
+        c.severity === "notable" || c.severity === "moderate" || c.severity === "low"
+          ? c.severity
+          : undefined,
     }))
     .filter((c) => c.area.length > 0);
+}
+
+interface EditMasks {
+  /** White where the generated result may replace the original photograph. */
+  coverage: Buffer;
+}
+
+/**
+ * Build a feathered treatment-zone mask from the coordinates placed on the
+ * client's face by the vision analysis. This is a hard identity boundary: the
+ * model is not allowed to repaint the entire photograph, and the same mask is
+ * applied again after grading so every pixel outside the indicated skin zones
+ * comes from the original upload.
+ */
+async function buildEditMasks(concerns: ConcernArea[]): Promise<EditMasks | null> {
+  const editable = concerns
+    .filter(
+      (concern) =>
+        concern.scope !== "preserve" &&
+        typeof concern.x === "number" &&
+        typeof concern.y === "number",
+    )
+    .slice(0, 6);
+  if (!editable.length) return null;
+
+  const protectedAreas = concerns
+    .filter(
+      (concern) =>
+        concern.scope === "preserve" &&
+        typeof concern.x === "number" &&
+        typeof concern.y === "number",
+    )
+    .slice(0, 8);
+
+  const ellipses = editable
+    .map((concern) => {
+      const window = zoneWindowFor(concern.area, concern.concern);
+      const text = `${concern.area} ${concern.concern}`.toLowerCase();
+      const jaw = /(jaw|jowl|lax|sag|lower.face|neck|chin|firm|elastic)/.test(text);
+      const folds = /(nasolabial|marionette|perioral|smile line|mouth)/.test(text);
+      const width = SIZE * window * (jaw ? 0.94 : folds ? 0.7 : 0.72);
+      const height = SIZE * window * (jaw ? 0.48 : folds ? 0.78 : 0.64);
+      const cx = (concern.x! / 100) * SIZE;
+      const cy = (concern.y! / 100) * SIZE;
+      return `<ellipse cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" rx="${(
+        width / 2
+      ).toFixed(1)}" ry="${(height / 2).toFixed(1)}" fill="white"/>`;
+    })
+    .join("");
+
+  // A treatable line or texture zone can overlap pigmentation, a mole or
+  // another excluded feature. The API mask and the final local composite both
+  // use this same coverage image, so punching protected regions out here is a
+  // pixel-level guarantee: those areas are restored from the original upload
+  // even if the image model tries to improve them.
+  const protectedEllipses = protectedAreas
+    .map((concern) => {
+      const text = `${concern.area} ${concern.concern}`.toLowerCase();
+      const pigmentation = /(pigment|melasma|discolou?r|brown patch|uneven tone)/.test(text);
+      const conditionLike =
+        /(lesion|mole|skin tag|birthmark|wound|ulcer|crust|scal(?:e|y|ing)|rash|infection|blister|weeping|bleeding)/.test(text);
+      const forehead = pigmentation && /forehead/.test(text);
+      const cheek = pigmentation && /cheek/.test(text);
+      const rx = SIZE * (forehead ? 0.34 : cheek ? 0.27 : pigmentation ? 0.3 : conditionLike ? 0.22 : 0.16);
+      const ry = SIZE * (forehead ? 0.15 : cheek ? 0.13 : pigmentation ? 0.17 : conditionLike ? 0.18 : 0.13);
+      const cx = (concern.x! / 100) * SIZE;
+      const cy = (concern.y! / 100) * SIZE;
+      return `<ellipse cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" rx="${rx.toFixed(1)}" ry="${ry.toFixed(1)}" fill="black"/>`;
+    })
+    .join("");
+
+  const svg = Buffer.from(
+    `<svg width="${SIZE}" height="${SIZE}" xmlns="http://www.w3.org/2000/svg">` +
+      `<defs>` +
+      `<filter id="soft"><feGaussianBlur stdDeviation="22"/></filter>` +
+      `<filter id="face-soft"><feGaussianBlur stdDeviation="14"/></filter>` +
+      `<mask id="face">` +
+      `<rect width="100%" height="100%" fill="black"/>` +
+      `<ellipse cx="${SIZE * 0.5}" cy="${SIZE * 0.55}" rx="${SIZE * 0.345}" ry="${SIZE * 0.49}" fill="white" filter="url(#face-soft)"/>` +
+      `</mask>` +
+      `</defs>` +
+      `<rect width="100%" height="100%" fill="black"/>` +
+      `<g filter="url(#soft)" mask="url(#face)">${ellipses}</g>` +
+      `<g filter="url(#face-soft)">${protectedEllipses}</g></svg>`,
+  );
+  // SVG input carries an alpha channel. Remove it before using this buffer as
+  // a one-channel mask; otherwise RGBA bytes are misread as neighbouring alpha
+  // pixels and the protection geometry is silently scrambled.
+  const coverage = await sharp(svg)
+    .removeAlpha()
+    .toColourspace("b-w")
+    .png()
+    .toBuffer();
+  return { coverage };
+}
+
+/** Restore the original photograph outside the permitted treatment zones. */
+async function localiseResult(
+  generated: Buffer,
+  original: Buffer,
+  masks: EditMasks | null,
+): Promise<Buffer> {
+  if (!masks) return generated;
+  const alpha = await sharp(masks.coverage)
+    .removeAlpha()
+    .toColourspace("b-w")
+    .raw()
+    .toBuffer();
+  const overlay = await sharp(generated)
+    .resize(SIZE, SIZE, { fit: "fill" })
+    .removeAlpha()
+    .joinChannel(alpha, { raw: { width: SIZE, height: SIZE, channels: 1 } })
+    .png()
+    .toBuffer();
+  return sharp(original)
+    .composite([{ input: overlay, blend: "over" }])
+    .jpeg({ quality: 95 })
+    .toBuffer();
 }
 
 export async function POST(req: Request) {
@@ -332,6 +465,17 @@ export async function POST(req: Request) {
   const preserve = parsePreserve(body.preserve);
   const concerns = parseConcerns(body.concerns ?? body.areas);
   const matched = planFor(concerns);
+  const glowStrength = concerns.some(
+    (concern) =>
+      concern.scope !== "preserve" &&
+      concern.severity === "notable" &&
+      /(hydrat|radiance|dull|glow|luminos)/i.test(`${concern.area} ${concern.concern}`),
+  )
+    ? 3
+    : glowStrengthFromEnv();
+  const firmnessStrength = matched.some((product) => product.id === "ultra-lift")
+    ? firmnessStrengthFromEnv()
+    : 0;
   const sessions = Math.max(...matched.map((product) => product.sessions), 3);
   const prompt = buildAfterImagePrompt(concerns, hero, {
     personalised: verdict.ok ? verdict.prompt : null,
@@ -351,6 +495,7 @@ export async function POST(req: Request) {
   } catch {
     return NextResponse.json({ error: "That image could not be read." }, { status: 400 });
   }
+  const editMasks = await buildEditMasks(concerns);
 
   /**
    * STREAMED, AND IT IS THE SINGLE BIGGEST THING WE CAN DO ABOUT THE WAIT.
@@ -396,6 +541,11 @@ export async function POST(req: Request) {
         () => send({ type: "heartbeat" }),
         15_000,
       );
+      const batchAbort = new AbortController();
+      const budgetTimer = setTimeout(
+        () => batchAbort.abort(),
+        Math.max(1_000, REQUEST_BUDGET_MS - 1_000),
+      );
 
       /**
        * One generation. Only the first candidate reports progress, because the
@@ -421,6 +571,11 @@ export async function POST(req: Request) {
           new Blob([new Uint8Array(source)], { type: "image/png" }),
           "face.png",
         );
+        // Do not submit the coverage image as an upstream edit mask. With
+        // gpt-image-2 JPEG output that path can return opaque black holes in
+        // the editable regions. The generated photograph is instead localised
+        // below with the same feathered coverage image, restoring every pixel
+        // outside the permitted zones from the client's original photograph.
         form.append("prompt", text);
         form.append("size", "1024x1024");
         form.append("quality", quality);
@@ -439,91 +594,120 @@ export async function POST(req: Request) {
         const remaining = deadlineAt - Date.now();
         if (remaining < 2_000) return null;
         const perCallCeiling = quality === "high" ? 180_000 : 135_000;
-        const res = await fetch("https://api.openai.com/v1/images/edits", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${apiKey}` },
-          body: form,
-          signal: AbortSignal.timeout(
-            Math.max(1_000, Math.min(perCallCeiling, remaining - 1_000)),
-          ),
-        });
-        if (!res.ok) {
-          const detail = await res.text().catch(() => "");
-          console.error(`[transform] upstream ${res.status}: ${detail.slice(0, 300)}`);
-          return null;
-        }
+        const callAbort = new AbortController();
+        const abortCall = () => callAbort.abort();
+        const callTimer = setTimeout(
+          abortCall,
+          Math.max(1_000, Math.min(perCallCeiling, remaining - 1_000)),
+        );
+        batchAbort.signal.addEventListener("abort", abortCall, { once: true });
+        try {
+          const res = await fetch("https://api.openai.com/v1/images/edits", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiKey}` },
+            body: form,
+            signal: callAbort.signal,
+          });
+          if (!res.ok) {
+            const detail = await res.text().catch(() => "");
+            console.error(`[transform] upstream ${res.status}: ${detail.slice(0, 300)}`);
+            return null;
+          }
 
         // Only the candidate the client is watching needs partial frames.
         // Background candidates return ordinary JSON, avoiding three paid
         // partial renders per candidate that nobody ever sees.
-        if (!reportProgress) {
-          const payload = (await res.json()) as {
-            data?: Array<{ b64_json?: string }>;
-          };
-          return payload.data?.[0]?.b64_json ?? null;
-        }
-        if (!res.body) return null;
+          if (!reportProgress) {
+            const payload = (await res.json()) as {
+              data?: Array<{ b64_json?: string }>;
+            };
+            return payload.data?.[0]?.b64_json ?? null;
+          }
+          if (!res.body) return null;
 
-        let b64: string | null = null;
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = "";
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
+          let b64: string | null = null;
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buf = "";
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
           // Keep the trailing fragment: a frame carrying a megabyte of base64
           // straddles many chunks.
-          const frames = buf.split("\n\n");
-          buf = frames.pop() ?? "";
-          for (const frame of frames) {
-            const line = frame.split("\n").find((l) => l.startsWith("data:"));
-            if (!line) continue;
-            const payload = line.slice(5).trim();
-            if (!payload || payload === "[DONE]") continue;
-            let event: { type?: string; b64_json?: string };
-            try {
-              event = JSON.parse(payload);
-            } catch {
-              continue;
-            }
-            if (event.type === "image_edit.partial_image") {
+            const frames = buf.split("\n\n");
+            buf = frames.pop() ?? "";
+            for (const frame of frames) {
+              const line = frame.split("\n").find((l) => l.startsWith("data:"));
+              if (!line) continue;
+              const payload = line.slice(5).trim();
+              if (!payload || payload === "[DONE]") continue;
+              let event: { type?: string; b64_json?: string };
+              try {
+                event = JSON.parse(payload);
+              } catch {
+                continue;
+              }
+              if (event.type === "image_edit.partial_image") {
               // A CHECKPOINT, NOT A PICTURE — the client sees a progress bar,
               // never the model's half-finished draft. See PreviewProgress.
-              if (reportProgress) send({ type: "partial" });
-            } else if (event.type === "image_edit.completed" && event.b64_json) {
-              b64 = event.b64_json;
+                if (reportProgress) send({ type: "partial" });
+              } else if (event.type === "image_edit.completed" && event.b64_json) {
+                b64 = event.b64_json;
+              }
             }
           }
+          return b64;
+        } finally {
+          clearTimeout(callTimer);
+          batchAbort.signal.removeEventListener("abort", abortCall);
         }
-        return b64;
       };
 
       try {
         /**
-         * BEST OF N, FIRED TOGETHER — the lever that finally moved this.
+         * FIRST SAFE WINNER, FIRED TOGETHER.
          *
-         * A single generation is not the model's answer, it is one draw from a
-         * wide distribution. Measured on the same face, same prompt, same tier,
-         * four candidates scored 4, 3, 3 and 1 out of 5 on credibility: the
-         * spread within one config is larger than the gap between any two
-         * configs tested all session. Judging four and keeping the best lifts
-         * the typical result from ~2.5 to ~3.5.
-         *
-         * It also reprices the whole thing. Four MEDIUM candidates cost $0.21 —
-         * exactly one HIGH image, which measured no better than a single medium
-         * one — and because they run in parallel the client waits ~70s instead
-         * of ~190s. Better result, a third of the wait, same money.
+         * Two MEDIUM candidates preserve the quality insurance of multiple
+         * draws, but we no longer wait for both once one is verified. This keeps
+         * the successful path near one generation's latency and bounds outliers.
          */
         const candidatePrompts = [
           prompt,
-          `${prompt}\n\nFINAL EMPHASIS: At side-by-side comparison size, make the first treatment priority immediately visible while staying within every preservation and identity constraint.`,
+          `${prompt}\n\nFINAL EMPHASIS: Show the strongest believable end-of-course improvement in the TREATABLE concerns only. Make the first treatable priority immediately visible at side-by-side size, while every excluded pigmentation pattern remains identical in colour, density, boundaries and position. A merely dewy or almost unchanged version is not successful.`,
           `${prompt}\n\nFINAL EMPHASIS: Preserve real pores, fine skin grain and local shine in the improved areas. The result must read as treated skin photographed by a camera, never retouched skin.`,
-          `${prompt}\n\nFINAL EMPHASIS: Show the strongest believable end-of-course improvement allowed by this brief. A merely dewy or almost unchanged version is not a successful result.`,
+          `${prompt}\n\nFINAL EMPHASIS: At side-by-side comparison size, make the first treatment priority immediately visible while staying within every preservation and identity constraint.`,
         ];
+        const safe = (v: Assessment | null) =>
+          Boolean(
+            v &&
+              v.samePerson &&
+              v.visible >= 3 &&
+              v.photographic >= 3 &&
+              v.targeted >= 3 &&
+              v.credible >= 3 &&
+              (v.preserved !== false),
+          );
+        const pigmentationPreservationCase = concerns.some(
+          (concern) =>
+            concern.scope === "preserve" &&
+            /(pigment|melasma|discolou?r|brown patch)/i.test(
+              `${concern.area} ${concern.concern}`,
+            ),
+        );
+        const fallbackQualityFloor = pigmentationPreservationCase ? 2 : 3;
+        const publishable = (v: Assessment | null) =>
+          Boolean(
+            v &&
+              v.samePerson &&
+              v.visible >= 2 &&
+              v.photographic >= fallbackQualityFloor &&
+              v.targeted >= fallbackQualityFloor &&
+              v.credible >= fallbackQualityFloor &&
+              (v.preserved !== false),
+          );
         let generatedCount = 0;
-        const candidateResults = await Promise.allSettled(
-          Array.from({ length: Math.max(1, CANDIDATES) }, async (_, i) => {
+        const makeCandidate = async (i: number) => {
             const candidateStarted = Date.now();
             const b64 = await generate(
               candidatePrompts[i % candidatePrompts.length],
@@ -535,12 +719,13 @@ export async function POST(req: Request) {
             if (generatedCount === 1) send({ type: "stage", stage: 4 });
             if (generatedCount === 2) send({ type: "stage", stage: 5 });
 
-            const image = await hydrationGrade(
+            const graded = await hydrationGrade(
               Buffer.from(b64, "base64"),
-              glowStrengthFromEnv(),
+              glowStrength,
               square,
-              0,
+              firmnessStrength,
             );
+            const image = await localiseResult(graded, square, editMasks);
             const generatedMs = Date.now() - candidateStarted;
             const v = await assess(
               square,
@@ -556,15 +741,53 @@ export async function POST(req: Request) {
               generatedMs,
               totalMs: Date.now() - candidateStarted,
             };
-          }),
-        );
-        const candidates = candidateResults
-          .map((result) =>
-            result.status === "fulfilled" ? result.value : null,
-          )
-          .filter((candidate): candidate is NonNullable<typeof candidate> =>
-            Boolean(candidate),
+        };
+        type Candidate = NonNullable<Awaited<ReturnType<typeof makeCandidate>>>;
+        const pending = new Map<
+          number,
+          Promise<{ index: number; candidate: Candidate | null }>
+        >();
+        for (let i = 0; i < Math.max(1, CANDIDATES); i += 1) {
+          pending.set(
+            i,
+            makeCandidate(i)
+              .then((candidate) => ({ index: i, candidate }))
+              .catch(() => ({ index: i, candidate: null })),
           );
+        }
+
+        const candidates: Candidate[] = [];
+        let earlyWinner: Candidate | null = null;
+        while (pending.size > 0) {
+          const completed = await Promise.race(pending.values());
+          pending.delete(completed.index);
+          if (!completed.candidate) continue;
+          candidates.push(completed.candidate);
+          if (publishable(completed.candidate.v)) {
+            earlyWinner = completed.candidate;
+            break;
+          }
+        }
+
+        // Conversion speed matters more than comparing two already-safe images.
+        // Publish the first candidate that clears every gate, and stop spending
+        // the client's time on slower background candidates.
+        if (earlyWinner) {
+          batchAbort.abort();
+          send({
+            type: "final",
+            image: `data:image/jpeg;base64,${earlyWinner.image.toString("base64")}`,
+            verified: earlyWinner.v?.samePerson ?? null,
+            improved: earlyWinner.v ? earlyWinner.v.visible >= 3 : null,
+            strong: safe(earlyWinner.v),
+            preserved: earlyWinner.v?.preserved ?? null,
+          });
+          console.info(
+            `[transform] first safe ${QUALITY} candidate published in ${((Date.now() - started) / 1000).toFixed(0)}s`,
+          );
+          return;
+        }
+
         if (!candidates.length) {
           send({ type: "error", error: "We couldn't generate your after image." });
           return;
@@ -579,27 +802,11 @@ export async function POST(req: Request) {
         // with `photographic` as the tie-break against a convincing-but-plastic
         // winner. A candidate that is not the same person is unusable at any
         // score, so it is pushed to the bottom rather than merely penalised.
-        const safe = (v: Assessment | null) =>
-          Boolean(
-            v &&
-              v.samePerson &&
-              v.visible >= 3 &&
-              v.photographic >= 3 &&
-              v.credible >= 3 &&
-              (v.preserved !== false),
-          );
         // A result can be safe to show even when it falls short of the stronger
         // commercial visibility gate. Previously those identity-safe,
         // photographic results were thrown away and the UI blamed the input
         // photo. The stronger gate still triggers a correction pass; this one
         // decides only whether a completed image is honest enough to publish.
-        const publishable = (v: Assessment | null) =>
-          Boolean(
-            v &&
-              v.samePerson &&
-              v.photographic >= 3 &&
-              (v.preserved !== false),
-          );
         const rank = (v: Assessment | null) =>
           !v
             ? 0
@@ -655,19 +862,24 @@ export async function POST(req: Request) {
           if (rescued) {
             const rescuedGrade = await hydrationGrade(
               Buffer.from(rescued, "base64"),
-              glowStrengthFromEnv(),
+              glowStrength,
               square,
-              0,
+              firmnessStrength,
+            );
+            const rescuedLocal = await localiseResult(
+              rescuedGrade,
+              square,
+              editMasks,
             );
             const rescuedJudge = await assess(
               square,
-              rescuedGrade,
+              rescuedLocal,
               preserve,
               concerns,
               sessions,
               deadlineAt,
             );
-            allGraded = [...allGraded, rescuedGrade];
+            allGraded = [...allGraded, rescuedLocal];
             judged = [...judged, rescuedJudge];
             order = allGraded
               .map((image, i) => ({ image, v: judged[i] }))
@@ -694,22 +906,34 @@ export async function POST(req: Request) {
         // Every published preview must now clear the four gates clients and the
         // clinic actually care about: identity, visible difference, photographic
         // credibility and preservation of out-of-scope features.
-        if (check && !publishable(check)) {
-          const reason = !check.samePerson
-            ? "identity"
-            : check.preserved === false
-              ? "preservation"
-              : "realism";
+        if (!check || !publishable(check)) {
+          const reason = !check
+            ? "verification"
+            : !check.samePerson
+              ? "identity"
+              : check.preserved === false
+                ? "preservation"
+                : check.visible < 2
+                  ? "visibility"
+                  : check.targeted < 3
+                    ? "targeting"
+                    : "realism";
           send({
             type: "error",
             reason,
             error:
-              reason === "identity"
+              reason === "verification"
+                ? "The simulation could not be verified safely enough to show."
+                : reason === "identity"
                 ? "The simulation did not hold your likeness closely enough to show."
                 : reason === "preservation"
                   ? "The simulation changed a feature the treatment cannot change."
-                  : "The simulation did not look photographic enough to show.",
-            note: check.note,
+                  : reason === "visibility"
+                    ? "The simulated change was too subtle to be useful."
+                    : reason === "targeting"
+                      ? "The simulation changed too much outside the treatment priorities."
+                      : "The simulation did not look photographic enough to show.",
+            note: check?.note,
           });
         } else {
           send({
@@ -725,6 +949,8 @@ export async function POST(req: Request) {
         console.error("[transform] failed:", err);
         send({ type: "error", error: "We couldn't generate your after image." });
       } finally {
+        batchAbort.abort();
+        clearTimeout(budgetTimer);
         clearInterval(heartbeat);
         if (streamOpen) {
           streamOpen = false;

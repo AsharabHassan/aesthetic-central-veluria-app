@@ -16,9 +16,11 @@ const GOALS: SkinGoal[] = [
 export default function LeadForm({
   selfie,
   onSubmitted,
+  onGoalsChange,
 }: {
   selfie: string;
   onSubmitted: (lead: LeadPayload, meta: GhlMeta) => void;
+  onGoalsChange?: (goals: SkinGoal[]) => void;
 }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -29,9 +31,11 @@ export default function LeadForm({
   const [submitting, setSubmitting] = useState(false);
 
   const toggleGoal = (g: SkinGoal) =>
-    setGoals((prev) =>
-      prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g],
-    );
+    setGoals((prev) => {
+      const next = prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g];
+      onGoalsChange?.(next);
+      return next;
+    });
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
