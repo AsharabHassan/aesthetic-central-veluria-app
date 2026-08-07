@@ -178,39 +178,49 @@ export default function Home() {
           ),
       ]),
     ];
-    const previewAbort = new AbortController();
-    const previewTimeout = window.setTimeout(
-      () => previewAbort.abort(),
-      245_000,
-    );
-
     setPreviewPending(true);
     setPreviewFailed(false);
+    setPreviewRefusal(null);
     setPreviewStage(0);
     previewForImage.current = image;
-    const request = fetch("/api/transform", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: previewAbort.signal,
-      body: JSON.stringify({
-        image,
-        afterImagePrompt: profile.afterImagePrompt,
-        preserve: previewPreserve,
-        concerns: profile.annotations.map((annotation) => ({
-          area: annotation.area,
-          concern: annotation.concern,
-          scope: annotation.scope,
-          x: annotation.x,
-          y: annotation.y,
-          severity: annotation.severity,
-        })),
-        hero: heroArea
-          ? { area: heroArea.area, concern: heroArea.concern }
-          : null,
-      }),
-    })
-      .then(async (response) => {
-        if (!response.ok || !response.body) return null;
+    const transformBody = JSON.stringify({
+      image,
+      afterImagePrompt: profile.afterImagePrompt,
+      preserve: previewPreserve,
+      concerns: profile.annotations.map((annotation) => ({
+        area: annotation.area,
+        concern: annotation.concern,
+        scope: annotation.scope,
+        x: annotation.x,
+        y: annotation.y,
+        severity: annotation.severity,
+      })),
+      hero: heroArea
+        ? { area: heroArea.area, concern: heroArea.concern }
+        : null,
+    });
+
+    type PreviewAttempt = {
+      image: string | null;
+      failure: "claim" | "failed" | null;
+    };
+    const attempt = async (): Promise<PreviewAttempt> => {
+      // Upload time is part of a browser fetch timeout. A 1024px photograph can
+      // spend minutes uploading on weak mobile data before the server even
+      // begins its own 220-second generation budget, so keep these clocks
+      // separate enough that a slow upload cannot masquerade as a quality
+      // rejection.
+      const abort = new AbortController();
+      const timeout = window.setTimeout(() => abort.abort(), 420_000);
+      try {
+        const response = await fetch("/api/transform", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: abort.signal,
+          body: transformBody,
+        });
+        if (!response.ok || !response.body)
+          return { image: null, failure: "failed" };
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -229,6 +239,7 @@ export default function Home() {
               type?: string;
               image?: string;
               stage?: number;
+              reason?: string;
             };
             try {
               message = JSON.parse(line.slice(5).trim());
@@ -247,14 +258,39 @@ export default function Home() {
             } else if (message.type === "final" && message.image) {
               final = message.image;
             } else if (message.type === "error") {
-              return null;
+              return {
+                image: null,
+                // A named reason is an intentional quality/safety refusal.
+                // An unnamed error is an interrupted provider/connection path
+                // and is safe to retry automatically.
+                failure: message.reason ? "claim" : "failed",
+              };
             }
           }
         }
-        return final;
-      })
-      .catch(() => null)
-      .finally(() => window.clearTimeout(previewTimeout));
+        return final
+          ? { image: final, failure: null }
+          : { image: null, failure: "failed" };
+      } catch {
+        return { image: null, failure: "failed" };
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    };
+
+    const request = (async () => {
+      let outcome = await attempt();
+      if (!outcome.image && outcome.failure === "failed") {
+        // One clean retry handles a dropped mobile upload or transient provider
+        // connection without spending again on a result that the safety gate
+        // deliberately refused.
+        setPreviewStage(0);
+        await new Promise((resolve) => window.setTimeout(resolve, 1_500));
+        outcome = await attempt();
+      }
+      setPreviewRefusal(outcome.failure);
+      return outcome.image;
+    })();
 
     request.catch(() => {});
     previewPromise.current = request;
@@ -299,6 +335,7 @@ export default function Home() {
     setMapPending(false);
     setPreviewImage(null);
     setPreviewPending(false);
+    setPreviewRefusal(null);
     setZoneImages({});
     setZoneTargets([]);
     setZonePending(false);
@@ -364,6 +401,7 @@ export default function Home() {
     setMapPending(true);
     setPreviewPending(true);
     setPreviewFailed(false);
+    setPreviewRefusal(null);
     if (!previewPromise.current) setPreviewStage(0);
 
     let analysisResult: SkinAnalysis;
@@ -453,7 +491,7 @@ export default function Home() {
     const previewAbort = new AbortController();
     const previewTimeout = window.setTimeout(
       () => previewAbort.abort(),
-      245_000,
+      420_000,
     );
     const previewResponse = previewPromise.current
       ? previewPromise.current.then(
@@ -635,6 +673,7 @@ export default function Home() {
     previewForImage.current = null;
     setPreviewImage(null);
     setPreviewFailed(false);
+    setPreviewRefusal(null);
     setPreviewPending(true);
     setPreviewStage(0);
     setZoneImages({});
@@ -818,6 +857,7 @@ export default function Home() {
             previewImage={previewImage}
             previewPending={previewPending}
             previewFailed={previewFailed}
+            previewFailure={previewRefusal}
             previewStage={previewStage}
             zoneTargets={zoneTargets}
             zoneImages={zoneImages}

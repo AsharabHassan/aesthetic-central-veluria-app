@@ -106,7 +106,8 @@ export default function PreviewProgress({
 
         <p className="mt-3 text-xs text-plum-mute">
           Step {clamped + 1} of {STAGES.length} · usually 2–4 minutes in total.
-          This preview will stop cleanly if an image provider is delayed.
+          On slower mobile data, uploading your photograph can add extra time;
+          keep this page open and we will retry one interrupted connection.
         </p>
       </div>
     </div>

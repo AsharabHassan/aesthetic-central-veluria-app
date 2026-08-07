@@ -133,7 +133,10 @@ export default function FaceFramer({
     if (!ctx) return;
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(img, sx, sy, side, side, 0, 0, OUT, OUT);
-    onConfirm(canvas.toDataURL("image/jpeg", 0.92));
+    // 0.88 keeps pores and fine skin detail at 1024px while materially
+    // reducing the upload time on weak mobile data. The original 0.92 payload
+    // was large enough to consume the browser's entire generation window.
+    onConfirm(canvas.toDataURL("image/jpeg", 0.88));
   };
 
   // Scale against the box's REAL on-screen size, not the 1024 output size — the

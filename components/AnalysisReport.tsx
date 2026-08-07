@@ -220,6 +220,7 @@ export default function AnalysisReport({
   previewImage,
   previewPending,
   previewFailed,
+  previewFailure,
   previewStage,
   preserve,
   zoneTargets,
@@ -246,6 +247,8 @@ export default function AnalysisReport({
   previewPending?: boolean;
   /** The pass finished and produced nothing — show that, never a blank gap. */
   previewFailed?: boolean;
+  /** Distinguishes a quality refusal from a connection/provider interruption. */
+  previewFailure?: "claim" | "failed" | null;
   /** Generation checkpoints landed so far, driving the wait's progress bar. */
   previewStage?: number;
   /** Visible features a booster cannot treat — shown as the honest limit. */
@@ -563,13 +566,14 @@ export default function AnalysisReport({
               className="absolute inset-0 h-full w-full object-cover opacity-30 blur-sm"
             />
             <p className="relative text-sm font-medium text-plum">
-              We held back this preview because it did not pass our visibility,
-              likeness, targeting and realism checks.
+              {previewFailure === "failed"
+                ? "Your connection was interrupted before the verified After image arrived."
+                : "We held back this preview because it did not pass our visibility, likeness, targeting and realism checks."}
             </p>
             <p className="relative text-xs text-plum-soft">
-              Your photograph and analysis are valid. We simply will not show an
-              After image that is too subtle, changes who you are, or looks
-              artificially retouched.
+              {previewFailure === "failed"
+                ? "Your photograph and analysis are safely kept on this page. Try the preview again when the connection is steadier—there is no need to repeat the form."
+                : "Your photograph and analysis are valid. We simply will not show an After image that is too subtle, changes who you are, or looks artificially retouched."}
             </p>
             {onRetryPreview && (
               <button
@@ -577,7 +581,9 @@ export default function AnalysisReport({
                 onClick={onRetryPreview}
                 className="btn-serum relative mt-2"
               >
-                Generate my preview again
+                {previewFailure === "failed"
+                  ? "Retry my preview"
+                  : "Generate my preview again"}
               </button>
             )}
           </div>
@@ -652,12 +658,14 @@ export default function AnalysisReport({
         {!zonePending && shownZones.length === 0 && (
           <div className="rounded-2xl border border-white/70 bg-white/55 p-5 text-center backdrop-blur-sm">
             <p className="text-sm leading-relaxed text-plum">
-              We couldn&rsquo;t produce a close-up preview we&rsquo;re happy with
-              from this photo.
+              {previewFailure === "failed"
+                ? "The connection ended before your close-up previews arrived."
+                : "We couldn’t produce a close-up preview we’re happy with from this photo."}
             </p>
             <p className="mt-2 text-xs leading-relaxed text-plum-soft">
-              Your full skin analysis is below, and a brighter, front-on photo in
-              daylight usually gives us much more to work with.
+              {previewFailure === "failed"
+                ? "Your full skin analysis is still available below. Retry the visual preview above without re-entering your details."
+                : "Your full skin analysis is below, and a brighter, front-on photo in daylight usually gives us much more to work with."}
             </p>
           </div>
         )}
