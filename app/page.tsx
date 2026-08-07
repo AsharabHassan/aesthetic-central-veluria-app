@@ -181,7 +181,7 @@ export default function Home() {
     const previewAbort = new AbortController();
     const previewTimeout = window.setTimeout(
       () => previewAbort.abort(),
-      125_000,
+      245_000,
     );
 
     setPreviewPending(true);
@@ -453,7 +453,7 @@ export default function Home() {
     const previewAbort = new AbortController();
     const previewTimeout = window.setTimeout(
       () => previewAbort.abort(),
-      125_000,
+      245_000,
     );
     const previewResponse = previewPromise.current
       ? previewPromise.current.then(
@@ -625,6 +625,58 @@ export default function Home() {
     }
   };
 
+  const retryPreview = async () => {
+    if (!selfie || !analysis || previewPending) return;
+
+    // A failed promise used to stay cached for this photograph, so every
+    // apparent retry immediately replayed the same null result. Clear only the
+    // preview cache: the completed analysis and captured lead remain intact.
+    previewPromise.current = null;
+    previewForImage.current = null;
+    setPreviewImage(null);
+    setPreviewFailed(false);
+    setPreviewPending(true);
+    setPreviewStage(0);
+    setZoneImages({});
+    setZonePending(zoneTargets.length > 0);
+
+    const after = await startPreview(selfie, analysis);
+    if (!after) {
+      setPreviewFailed(true);
+      setPreviewPending(false);
+      setZonePending(false);
+      return;
+    }
+
+    setPreviewImage(after);
+    setPreviewPending(false);
+    try {
+      const [beforeImg, afterImg] = await Promise.all([
+        loadImage(selfie),
+        loadImage(after),
+      ]);
+      const beforeSq = toSquare(beforeImg, 1024);
+      const afterSq = toSquare(afterImg, 1024);
+      const pairs: Record<string, ZonePair> = {};
+      for (const z of zoneTargets) {
+        const side = zoneWindowFor(z.area, z.concern);
+        pairs[`${z.area}|${z.concern}`] = {
+          before: cropRegion(beforeSq, z.x, z.y, side, 1024).toDataURL(
+            "image/jpeg",
+            0.92,
+          ),
+          after: cropRegion(afterSq, z.x, z.y, side, 1024).toDataURL(
+            "image/jpeg",
+            0.92,
+          ),
+        };
+      }
+      setZoneImages(pairs);
+    } finally {
+      setZonePending(false);
+    }
+  };
+
   return (
     <main className="relative min-h-dvh">
       <header className="relative z-10">
@@ -776,6 +828,7 @@ export default function Home() {
             email={lead?.email ?? null}
             name={lead?.name ?? null}
             phone={lead?.phone ?? null}
+            onRetryPreview={retryPreview}
             onRestart={reset}
           />
         )}

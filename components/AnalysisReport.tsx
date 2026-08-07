@@ -230,6 +230,7 @@ export default function AnalysisReport({
   email,
   name,
   phone,
+  onRetryPreview,
   onRestart,
 }: {
   before: string;
@@ -265,6 +266,8 @@ export default function AnalysisReport({
   email?: string | null;
   name?: string | null;
   phone?: string | null;
+  /** Re-run only the visual simulation; never asks for the lead details again. */
+  onRetryPreview?: () => void;
   onRestart: () => void;
 }) {
   const [lightbox, setLightbox] = useState<string | null>(null);
@@ -568,6 +571,15 @@ export default function AnalysisReport({
               After image that is too subtle, changes who you are, or looks
               artificially retouched.
             </p>
+            {onRetryPreview && (
+              <button
+                type="button"
+                onClick={onRetryPreview}
+                className="btn-serum relative mt-2"
+              >
+                Generate my preview again
+              </button>
+            )}
           </div>
         ) : null}
 

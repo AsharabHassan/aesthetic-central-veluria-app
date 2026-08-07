@@ -91,8 +91,8 @@ const VERIFY_MODEL = "claude-sonnet-5";
  * "Final pass" indefinitely. This is one budget shared by the entire pipeline.
  */
 const REQUEST_BUDGET_MS = Math.min(
-  120_000,
-  Math.max(90_000, Number(process.env.AFTER_MAX_WAIT_MS ?? 115_000)),
+  240_000,
+  Math.max(150_000, Number(process.env.AFTER_MAX_WAIT_MS ?? 220_000)),
 );
 const VERIFY_CALL_TIMEOUT_MS = 40_000;
 /**
@@ -542,6 +542,7 @@ export async function POST(req: Request) {
         15_000,
       );
       const batchAbort = new AbortController();
+      let lastGenerationFailure: string | null = null;
       const budgetTimer = setTimeout(
         () => batchAbort.abort(),
         Math.max(1_000, REQUEST_BUDGET_MS - 1_000),
@@ -610,6 +611,7 @@ export async function POST(req: Request) {
           });
           if (!res.ok) {
             const detail = await res.text().catch(() => "");
+            lastGenerationFailure = `OpenAI image edit returned ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`;
             console.error(`[transform] upstream ${res.status}: ${detail.slice(0, 300)}`);
             return null;
           }
@@ -658,6 +660,10 @@ export async function POST(req: Request) {
             }
           }
           return b64;
+        } catch (error) {
+          lastGenerationFailure =
+            error instanceof Error ? error.message : "Image generation request failed.";
+          throw error;
         } finally {
           clearTimeout(callTimer);
           batchAbort.signal.removeEventListener("abort", abortCall);
@@ -789,7 +795,13 @@ export async function POST(req: Request) {
         }
 
         if (!candidates.length) {
-          send({ type: "error", error: "We couldn't generate your after image." });
+          send({
+            type: "error",
+            error: "We couldn't generate your after image.",
+            ...(process.env.NODE_ENV === "development" && lastGenerationFailure
+              ? { debug: lastGenerationFailure }
+              : {}),
+          });
           return;
         }
 
