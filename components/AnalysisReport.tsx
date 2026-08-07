@@ -166,7 +166,7 @@ function StickyCta({
   if (!scrolledPast) return null;
 
   return (
-    <div className="no-print fixed bottom-4 inset-x-0 z-40 flex justify-center px-4 pointer-events-none">
+    <div className="safe-fixed-bottom no-print fixed inset-x-0 z-40 flex justify-center px-4 pointer-events-none">
       <div className="pointer-events-auto flex max-w-[calc(100vw-2rem)] items-center gap-2.5 rounded-full border border-white/70 bg-white/85 px-4 py-2.5 backdrop-blur-xl shadow-[0_8px_32px_-10px_rgba(34,30,82,0.35)] sm:gap-3 sm:px-5 sm:py-3">
         {zonePending && shown === 0 ? (
           <>
@@ -182,7 +182,7 @@ function StickyCta({
             <span className="text-sm font-medium text-plum">Your close-ups are ready</span>
             <button
               onClick={scrollToReel}
-              className="ml-1 shrink-0 rounded-full bg-plum px-4 py-1.5 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-white shadow-sm transition hover:bg-plum-soft"
+              className="ml-1 min-h-11 shrink-0 rounded-full bg-plum px-4 py-1.5 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-white shadow-sm transition hover:bg-plum-soft"
             >
               View ↑
             </button>
@@ -202,7 +202,7 @@ function StickyCta({
               onClick={onBook}
               target="_blank"
               rel="noopener noreferrer"
-              className="shrink-0 whitespace-nowrap rounded-full bg-plum px-4 py-2 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-white shadow-sm transition hover:bg-plum-soft sm:px-5"
+              className="min-h-11 shrink-0 whitespace-nowrap rounded-full bg-plum px-4 py-2 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-white shadow-sm transition hover:bg-plum-soft sm:px-5"
             >
               Book free consultation
             </a>

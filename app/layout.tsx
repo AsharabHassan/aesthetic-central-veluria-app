@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Cormorant_Garamond, Montserrat } from "next/font/google";
 import MetaPixel from "@/components/MetaPixel";
 import "./globals.css";
@@ -22,6 +22,23 @@ export const metadata: Metadata = {
   title: "AI Skin Consultation | Aesthetics Central Clinic",
   description:
     "A complimentary AI skin consultation by Aesthetics Central Clinic, Luton — an in-depth skin analysis, a professional treatment map, and a personalised preview of your results.",
+  applicationName: "Aesthetics Central",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Aesthetics Central",
+  },
+  formatDetection: {
+    telephone: false,
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  colorScheme: "light",
+  themeColor: "#FBF8F3",
 };
 
 export default function RootLayout({

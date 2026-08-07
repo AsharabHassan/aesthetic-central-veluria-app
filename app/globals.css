@@ -13,9 +13,17 @@
     margin: 0;
   }
 
+  html {
+    background: #FBF8F3;
+    -webkit-text-size-adjust: 100%;
+  }
+
   body {
     @apply bg-pearl text-plum font-sans antialiased;
     min-height: 100dvh;
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+    -webkit-tap-highlight-color: transparent;
   }
 
   ::selection {
@@ -226,6 +234,14 @@
 
   .btn-ghost {
     @apply inline-flex items-center justify-center gap-2 rounded-full border border-[#9E9E9E] bg-white/60 px-9 py-4 text-[0.75rem] font-semibold uppercase tracking-[0.18em] text-plum transition-all duration-200 hover:border-plum hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  /* Keep fixed controls clear of iPhone notches and the home indicator. */
+  .safe-top {
+    padding-top: calc(2rem + env(safe-area-inset-top, 0px));
+  }
+  .safe-fixed-bottom {
+    bottom: max(1rem, env(safe-area-inset-bottom, 0px));
   }
 
   /* ---- Form fields ---- */

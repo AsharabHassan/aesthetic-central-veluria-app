@@ -142,7 +142,7 @@ export default function LeadForm({
                   type="button"
                   key={g}
                   onClick={() => toggleGoal(g)}
-                  className={`rounded-full border px-4 py-2 text-sm transition ${
+                  className={`min-h-11 rounded-full border px-4 py-2 text-sm transition ${
                     active
                       ? "border-transparent bg-plum text-white shadow-sm"
                       : "border-[#E0E0E0] bg-white/70 text-plum-soft hover:border-plum/40"

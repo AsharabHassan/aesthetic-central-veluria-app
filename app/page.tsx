@@ -680,7 +680,7 @@ export default function Home() {
   return (
     <main className="relative min-h-dvh">
       <header className="relative z-10">
-        <div className="mx-auto flex max-w-5xl flex-col items-center justify-center gap-1 px-6 pt-8">
+        <div className="safe-top mx-auto flex max-w-5xl flex-col items-center justify-center gap-1 px-6">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/aesthetics-central-logo.png"
